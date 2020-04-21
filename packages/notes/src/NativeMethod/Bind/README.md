@@ -86,7 +86,7 @@ const Person = _person._bind( _personObject );
 const nicholas = new Person( 'Nicholas' );
 console.log( nicholas );    // { name: 'Nicholas' }
 ```  
-![示例内存图]( ./example_01.png )   
+![示例内存图]( https://github.com/linhaotxl/frontend/blob/master/packages/notes/src/NativeMethod/Bind/example_01.png?raw=true )   
 
 通过上面的示例图，可以看出以下几点    
 * 如果我们将绑定函数作为构造函数使用，那么 `bound` 中的 `this` 就指向 `nicholas`， 而 `nicholas`的原型 `__proto__` 也就指向了绑定函数的原型，即最终指向原始函数的原型。  
@@ -122,6 +122,6 @@ Function.prototype._bind = function ( context ) {
 }
 ```   
 此时，内存图已经改为如下  
-![示例内存图]( ./example_02.png )  
+![示例内存图]( https://github.com/linhaotxl/frontend/blob/master/packages/notes/src/NativeMethod/Bind/example_02.png?raw=true )  
 
 现在，修改原始函数的原型和绑定函数的原型不再会互相影响

@@ -1,5 +1,5 @@
-import { Middleware1, Middleware2, Middleware3 } from './test.sync';
-// import { Middleware1, Middleware2, Middleware3, Middleware4, Middleware5 } from './test.async';
+import { SyncMiddleware1, SyncMiddleware2, SyncMiddleware3 } from './test.sync';
+import { AsyncMiddleware1, AsyncMiddleware2, AsyncMiddleware3, AsyncMiddleware4, AsyncMiddleware5 } from './test.async';
 
 type Middleware = ( context: MiddlewareContext, next: Function ) => void;
 type MiddlewareContext = object;
@@ -23,6 +23,10 @@ type MiddlewareContext = object;
 function compose ( ...middlewares: any[] ) {
     return function ( ctx: any ) {
         function dispatch ( index: number ) {
+            if ( middlewares.length === index ) {
+                return ;
+            }
+
             const middleware = middlewares[index];
             // console.log( 1, index, middlewares[0] )
             middleware( ctx, dispatch.bind( null, index + 1 ) );
@@ -34,5 +38,5 @@ function compose ( ...middlewares: any[] ) {
 }
 
 export default function start () {
-    compose( Middleware1, Middleware2, Middleware3 )({});
+    compose( AsyncMiddleware1, AsyncMiddleware5, AsyncMiddleware2 )({});
 }

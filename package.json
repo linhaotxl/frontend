@@ -2,7 +2,8 @@
   "name": "frontend",
   "private": true,
   "scripts": {
-    "watch:notes": "lerna run --parallel --scope notes watch"
+    "init": "npx lerna bootstrap",
+    "watch:notes": "npx lerna run --parallel --scope notes watch"
   },
   "devDependencies": {
     "lerna": "^3.20.2"

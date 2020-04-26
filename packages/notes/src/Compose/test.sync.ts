@@ -15,3 +15,8 @@ export const SyncMiddleware3 = ( context: any, next: Function ) => {
     const result = next();
     console.log( 'Sync Middleware3 end.', result );
 };
+
+export const SyncMiddleware4 = ( context: any, next: Function ) => {
+    console.log( 'Sync Middleware4 start.' );
+    throw new Error( 'Sync Middleware4 Error.' );
+};

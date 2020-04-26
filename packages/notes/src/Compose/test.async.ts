@@ -26,9 +26,6 @@ export const AsyncMiddleware3 = async ( context: any, next: Function ) => {
 export const AsyncMiddleware4 = async ( context: any, next: Function ) => {
     console.log( 'Async Middleware4 start.' );
     throw new Error( 'Async Middleware4 error.' );
-    const result = await next();
-    console.log( 'Async Middleware4 end.', result );
-    return '444';
 };
 
 export const AsyncMiddleware5 = async ( context: any, next: Function ) => {
@@ -38,4 +35,11 @@ export const AsyncMiddleware5 = async ( context: any, next: Function ) => {
     console.log( 'delay... end' );
     const result = await next();
     console.log( 'Async Middleware5 end.', result );
+};
+
+export const AsyncMiddleware6 = async ( context: any, next: Function ) => {
+    console.log( 'Async Middleware6 start.' );
+    await next();
+    await next();
+    console.log( 'Async Middleware6 end.' );
 };

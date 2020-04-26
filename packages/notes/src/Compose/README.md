@@ -40,7 +40,7 @@ compose( middleware1, middleware2, middleware3 )({});
 
 这就是典型的洋葱模型，如图，由外层逐渐向里层，然后再一层一层出来  
 
-![洋葱模型]( ./example_01.jpg )  
+![洋葱模型]( http://linhaotxl/frontend/blob/master/packages/notes/src/Compose/example_01.jpg?raw=true )  
 
 ### 实现 koa-compose   
 首先从上面的例子中可以看出以下几点  

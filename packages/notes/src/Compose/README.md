@@ -47,14 +47,14 @@ compose( SyncMiddleware1, SyncMiddleware2, SyncMiddleware3 )({});
 1. `compose` 的参数是中间件数组  
 2. `compose` 返回一个新的函数，新的函数接受一个作用域参数，即每个中间件的 `ctx` 参数  
 3. 中间件必须是函数，且可以接受两个参数，作用域对象 `ctx` 和执行下一个中间件的回调 `next`   
-4. 因为我们不知道总共有几个中间件，所以必须手动调用 `next` 方法来保证后续的中间件能被执行  
+4. 因为我们不知道总共有几个中间件，所以必须在每个中间件内手动调用 `next` 来保证后续的中间件能被执行  
 5. 默认会调用第一个中间件   
 
 #### 版本一  
 
 ```javascript
 function compose ( middlewares ) {
-    return function ( ctx ) {
+    return function composeInner ( ctx ) {
         function dispatch ( index ) {
             // 获取当前的中间件
             const middleware = middlewares[index];
@@ -136,7 +136,7 @@ compose([ AsyncMiddleware1, AsyncMiddleware5, AsyncMiddleware2 ])({});
 // Async Middleware5 end. undefined
 ```    
 
-可以看出，和我们预期的结果不符，正确的结果应该是下面这样  
+可以看出，和我们预期的结果不符，预期的结果应该是下面这样  
 ```javascript
 // Async Middleware1 start.
 // Async Middleware5 start.
@@ -150,8 +150,8 @@ compose([ AsyncMiddleware1, AsyncMiddleware5, AsyncMiddleware2 ])({});
 ```      
 
 `Async Middleware1 end. undefined` 这句应该在最后一步执行，但是这里却提前执行了。  
-首先来看 `Async Middleware1` 中间件内部，执行 `await next()` 后，`next` 函数返回的是 `undefiend` 而不是 `Promise`，所以会将后面的任务直接放在微任务里，而不是等到下一个中间件执行完成后，再执行之后的逻辑。所以，现在要确保先要执行后面的中间件，再执行之后的逻辑，所以 `next` 方法要返回一个 `Promise` 对象，而 `async` 的中间件本身就会返回一个 `Promise`，所以可以直接将中间件函数 `return` 出来。  
-这样，后续的任务都会在 `await next()` 这个中间件后面才执行。  
+首先来看 `Async Middleware1` 中间件内部，执行 `await next()` 等待，但此时 `next` 函数返回的是 `undefiend` 而不是 `Promise`，所以会将后面的任务直接放在微任务里，而不是等到下一个中间件执行完成后，再执行之后的逻辑。  
+所以 `next` 方法要返回一个 `Promise` 对象，而对于 `async` 的中间件本身就会返回一个 `Promise`，所以可以直接将中间件函数 `return` 出来。    
 
 #### 版本三  
 
@@ -168,7 +168,7 @@ function compose ( middlewares ) {
             const middleware = middlewares[index];
             // 执行中间件，并传入作用域对象 ctx 和 dispatch 方法，并且 dispatch 方法的参数会自动 + 1
             // 这样，在中间件里我们调用 next 的时候就不需要传参数，就会执行下一个中间件了
-            // 将中间件函数返回出去
+            // 将中间件函数返回出去，保证在调用 await next() 时能先执行后面的中间件，再执行之后的逻辑
             return middleware( ctx, dispatch.bind( null, index + 1 ) );
         }
 
@@ -217,7 +217,7 @@ function compose ( middlewares ) {
             const middleware = middlewares[index];
             // 执行中间件，并传入作用域对象 ctx 和 dispatch 方法，并且 dispatch 方法的参数会自动 + 1
             // 这样，在中间件里我们调用 next 的时候就不需要传参数，就会执行下一个中间件了
-            // 将中间件函数返回出去
+            // 将中间件函数返回出去，保证在调用 await next() 时能先执行后面的中间件，再执行之后的逻辑
             return middleware( ctx, dispatch.bind( null, index + 1 ) );
         }
 
@@ -244,7 +244,7 @@ function compose ( middlewares ) {
             const middleware = middlewares[index];
             // 执行中间件，并传入作用域对象 ctx 和 dispatch 方法，并且 dispatch 方法的参数会自动 + 1
             // 这样，在中间件里我们调用 next 的时候就不需要传参数，就会执行下一个中间件了
-            // 将中间件函数返回出去
+            // 将中间件函数返回出去，保证在调用 await next() 时能先执行后面的中间件，再执行之后的逻辑
             return Promise.resolve( middleware( ctx, dispatch.bind( null, index + 1 ) ) );
         }
 
@@ -263,7 +263,7 @@ compose([ SyncMiddleware4 ])({})
 });
 ```  
 
-这段代码会抛出一个错，在 `dispatch` 中执行中间件的时候，抛出一个错 `Sync Middleware4 Error.`，而且又没有处理这个错误的回调。  
+这段代码在执行第一个中间件时会抛出一个错 `Sync Middleware4 Error.`，而且又没有处理这个错误的回调，因为此时返回的仍然是 `resolved` 的 `Promise`  
 
 对于这种情况，我们应该在内部检测是否出现了错误，如果出现错误应该返回一个 `rejected` 的 `Promise` 对象，而不是依旧返回一个 `resolved` 的 `Promise` 对象，修改如下  
 
@@ -282,7 +282,7 @@ function compose ( middlewares ) {
             const middleware = middlewares[index];
             // 执行中间件，并传入作用域对象 ctx 和 dispatch 方法，并且 dispatch 方法的参数会自动 + 1
             // 这样，在中间件里我们调用 next 的时候就不需要传参数，就会执行下一个中间件了
-            // 将中间件函数返回出去
+            // 将中间件函数返回出去，保证在调用 await next() 时能先执行后面的中间件，再执行之后的逻辑
             try {
                 return Promise.resolve( middleware( ctx, dispatch.bind( null, index + 1 ) ) );
             } catch ( e ) {
@@ -324,12 +324,12 @@ return compose([
 ```  
 
 从输出结果可以看出，`middleware3` 这个中间件没有执行，先来走遍流程  
-1. 首先执行 `compose([ middleware1, middleware2 ])` 返回 `composeInner` 函数  
-2. 再执行 `compose( composeInner, middleware3 )({})`  
-3. 执行 `return dispatch(0)`  
+1. 外部 `compose` 里有两个中间件，一个是内部 `compose` 返回的结果 `composeInner` 函数，一个是 `middleware3`  
+2. 外部 `compose` 执行 `dispatch(0)`，也就是第一个中间件 `composeInner`
+3. 再执行内部 `return dispatch(0)`  
 4. 执行 `middleware1` 中间件，并通过 `next` 执行第二个  
 5. 执行 `middleware2` 中间件，并通过 `next` 执行后面的中间件（ 已经没有其他中间件了，所以会直接返回 ）
-6. 所有的中间件都执行完了，回到了第三步，整个 `compose` 执行完成  
+6. 所有的中间件都执行完了，回到第三步，再回到第二步，流程结束  
 
 所以，根本就没有调用 `middleware3` 这个中间件。原因就在于，我们是判断 `index === middlewares.length` 成立后，就直接 `return` 了，而此时还存在其他的中间件的。  
 而这种情况只会出现在嵌套 `compose` 的情况中，像之前的例子中，都只有一层 `compose`，所以只会遍历这一层的中间件。  
@@ -347,19 +347,19 @@ function compose ( middlewares ) {
             // 获取当前的中间件
             let middleware = middlewares[index];
             
-            // 检测是否已经执行到最后一个中间件，如果是的话将执行外部中间件数组的方法赋值给 middleware
+            // 检测是否已经执行到一层中的最后一个中间件，如果是的话将执行外部中间件数组的方法赋值给 middleware
             if ( middlewares.length === index ) {
                 middleware = next;
             }
 
-            // 检测中间件是否有效，这个条件满足在处理最后一个中间件
+            // 检测中间件是否有效，这个条件只有在执行到整个流程的最后一个中间件才会满足
             if ( !middleware ) {
                 return Promise.resolve();
             }
 
             // 执行中间件，并传入作用域对象 ctx 和 dispatch 方法，并且 dispatch 方法的参数会自动 + 1
             // 这样，在中间件里我们调用 next 的时候就不需要传参数，就会执行下一个中间件了
-            // 将中间件函数返回出去
+            // 将中间件函数返回出去，保证在调用 await next() 时能先执行后面的中间件，再执行之后的逻辑
             try {
                 return Promise.resolve( middleware( ctx, dispatch.bind( null, index + 1 ) ) );
             } catch ( e ) {

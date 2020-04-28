@@ -20,47 +20,73 @@ type MiddlewareContext = object;
 //     }
 // }
 
-export function compose(middlewares: any[]) {
-    if ( !Array.isArray( middlewares ) ) {
-        throw new TypeError( 'Middleware stack must be an array!' );
-    }
-    for ( const middleware of middlewares ) {
-        if ( typeof middleware !== 'function' ) {
-            throw new TypeError( 'Middleware must be composed of functions!' );
-        }
-    }
-
-    return function composeInner (ctx: any, next?: Function) {
-        let lastCallIndex: number = -1;
-
-        function dispatch(index: number): any {
-            console.log( 'lastCallIndex -> ', lastCallIndex, ' index -> ', index );
-            if ( index <= lastCallIndex ) {
-                return Promise.reject( new Error( 'next() called multiple times' ) );
-            }
-
-            lastCallIndex = index;
-
-            let middleware = middlewares[index];
+export function compose ( middlewares: Function[] ) {
+    return function ( ctx: any, next?: Function ) {
+        function dispatch ( index: number ): any {
+            // 检测是否已经执行到最后一个中间件
             if ( middlewares.length === index ) {
-                middleware = next;
+                return Promise.resolve();
             }
 
-            if ( !middleware ) {
-                return Promise.resolve()
-            }
-
+            // 获取当前的中间件
+            const middleware = middlewares[index];
+            // 执行中间件，并传入作用域对象 ctx 和 dispatch 方法，并且 dispatch 方法的参数会自动 + 1
+            // 这样，在中间件里我们调用 next 的时候就不需要传参数，就会执行下一个中间件了
+            // 将中间件函数返回出去
+            // return Promise.resolve( middleware( ctx, dispatch.bind( null, index + 1 ) ) );
             try {
-                return Promise.resolve(middleware(ctx, dispatch.bind(null, index + 1)));
-            } catch (e) {
-                return Promise.reject(e);
+                return Promise.resolve( middleware( ctx, dispatch.bind( null, index + 1 ) ) );
+            } catch ( e ) {
+                return Promise.reject( e );
             }
         }
 
-        // 默认执行第一个中间件
-        return dispatch(0);
+        // 默认执行第一个中间件，并返回出去，处理 await 的情况
+        return dispatch( 0 );
     }
 }
+
+// export function compose(middlewares: any[]) {
+//     if ( !Array.isArray( middlewares ) ) {
+//         throw new TypeError( 'Middleware stack must be an array!' );
+//     }
+//     for ( const middleware of middlewares ) {
+//         if ( typeof middleware !== 'function' ) {
+//             throw new TypeError( 'Middleware must be composed of functions!' );
+//         }
+//     }
+
+//     return function composeInner (ctx: any, next?: Function) {
+//         let lastCallIndex: number = -1;
+
+//         function dispatch(index: number): any {
+//             console.log( 'lastCallIndex -> ', lastCallIndex, ' index -> ', index );
+//             if ( index <= lastCallIndex ) {
+//                 return Promise.reject( new Error( 'next() called multiple times' ) );
+//             }
+
+//             lastCallIndex = index;
+
+//             let middleware = middlewares[index];
+//             if ( middlewares.length === index ) {
+//                 middleware = next;
+//             }
+
+//             if ( !middleware ) {
+//                 return Promise.resolve()
+//             }
+
+//             try {
+//                 return Promise.resolve(middleware(ctx, dispatch.bind(null, index + 1)));
+//             } catch (e) {
+//                 return Promise.reject(e);
+//             }
+//         }
+
+//         // 默认执行第一个中间件
+//         return dispatch(0);
+//     }
+// }
 
 function wait(ms: number) {
     return new Promise(resolve => setTimeout(() => {
@@ -140,8 +166,9 @@ function test2 () {
 }
 
 export default async function start() {
+    testError();
     // testQian();
-    test2();
+    // test2();
     // await compose([  ])( {} );
     // console.log( '执行完成.' );
     // compose([ AsyncMiddleware4 ])({})

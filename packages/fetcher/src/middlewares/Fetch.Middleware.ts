@@ -4,7 +4,5 @@ export default async function fetchMiddleware ( ctx: MiddlewareContext, next: Ne
 
     ctx.response = response;
 
-    await next();
-
-    return ctx.response;
+    return await next();
 }

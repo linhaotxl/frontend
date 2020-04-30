@@ -2,14 +2,14 @@ import compose from '../utils/compose';
 import { isFunction } from '../utils/type';
 import FetcherRequest from './Request';
 import FetcherResponse from './Response';
-import fetchMiddleware from '../middlewares/Fetch.Middleware';
+import defaultMiddleware from '../middlewares/Default.Middleware';
 
 export default class Fetcher {
 
     private _middlewares: Middleware[] = [];
 
     constructor () {
-        this.use( fetchMiddleware );
+        this.use( ...defaultMiddleware );
     }
 
     use ( ...middlewares: Middleware[] ) {

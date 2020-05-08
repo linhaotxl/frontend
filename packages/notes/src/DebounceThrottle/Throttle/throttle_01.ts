@@ -1,5 +1,5 @@
 function throttle ( func: Function, wait: number ) {
-    let timer = null;
+    let timer: number = null;
 
     return function () {
         const self = this;

@@ -1,5 +1,5 @@
 function throttle ( func: Function, wait: number ) {
-    let start = Date.now();
+    let start: number = Date.now();
 
     return function () {
         const self = this;

@@ -1,14 +1,18 @@
+/**
+ * 节流 - 时间戳版
+ * @param { function } func 指定函数
+ * @param { number } wait 间隔时间
+ */
 function throttle ( func: Function, wait: number ) {
-    let start: number = Date.now();
+    let lastTime: number = Date.now();
 
     return function () {
         const self = this;
-        const args = Array.prototype.shift.call( arguments );
-        const current = Date.now();
+        const args = Array.prototype.slice.call( arguments );
 
-        if ( current - start >= wait ) {
+        if ( Date.now() - lastTime >= wait ) {
             func.apply( self, args );
-            start = Date.now();
+            lastTime = Date.now();
         }
     }
 }

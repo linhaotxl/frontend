@@ -1,9 +1,14 @@
+/**
+ * 节流 - 定时器版
+ * @param { function } func 指定函数
+ * @param { number } wait 间隔时间
+ */
 function throttle ( func: Function, wait: number ) {
     let timer: number = null;
 
     return function () {
         const self = this;
-        const args = Array.prototype.shift.call( arguments );
+        const args = Array.prototype.slice.call( arguments );
 
         if ( timer !== null ) {
             return ;

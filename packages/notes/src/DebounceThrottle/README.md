@@ -71,3 +71,59 @@ function debounce ( func: Function, wait: number ) {
 }
 ```  
 
+## 节流  
+节流是指在指定的 `n` 秒内，只会触发一次，实现方式主要有两种  
+1. 定时器版: 通过设置 `n` 秒的定时器来完成 
+2. 时间戳版: 通过计算时间戳，  
+
+### 定时器版  
+定时器版的核心思想设置一个开关变量，并且保存 `setTimeout` 的返回值，如果它有效的话就会提前结束调用，在 `wait` 秒后才会将它重置  
+
+```javascript
+/**
+ * 节流 - 定时器版
+ * @param { function } func 指定函数
+ * @param { number } wait 间隔时间
+ */
+function throttle ( func, wait ) {
+    let timer = null;
+
+    return function () {
+        const self = this;
+        const args = Array.prototype.slice.call( arguments );
+
+        if ( timer !== null ) {
+            return ;
+        }
+
+        timer = setTimeout(() => {
+            func.apply( self, args );
+            timer = null;
+        }, wait);
+    }
+}
+```  
+
+### 时间戳版   
+时间戳版主要是将上一次的调用时间和当前调用时间之间的时差进行比较，如果小于 `wait`，也就是不满足指定时间，就不会调用
+
+```javascript
+/**
+ * 节流 - 时间戳版
+ * @param { function } func 指定函数
+ * @param { number } wait 间隔时间
+ */
+function throttle ( func: Function, wait: number ) {
+    let lastTime: number = Date.now();
+
+    return function () {
+        const self = this;
+        const args = Array.prototype.slice.call( arguments );
+
+        if ( Date.now() - lastTime >= wait ) {
+            func.apply( self, args );
+            lastTime = Date.now();
+        }
+    }
+}
+```

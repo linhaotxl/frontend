@@ -106,12 +106,12 @@ const isObservableType = /*#__PURE__*/ makeMap(
 经过 `makeMap` 处理，最终 `isObservableType` 的形式如下  
 ```typescript
 const obj = {
-    Object: true,
-    Array: true,
-    Map: true,
-    Set: true,
-    WeakMap: true,
-    WeakSet: true,
+    'Object': true,
+    'Array': true,
+    'Map': true,
+    'Set': true,
+    'WeakMap': true,
+    'WeakSet': true,
 };
 const isObservableType = val => !!obj[ val ];
 ```  

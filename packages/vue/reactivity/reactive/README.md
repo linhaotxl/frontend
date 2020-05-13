@@ -33,13 +33,13 @@ const 响应对象 = new Proxy( 原始对象, { /**/ } );
 const rawToReactive = new WeakMap<any, any>() // 原始对象 -> 响应对象
 const reactiveToRaw = new WeakMap<any, any>() // 响应对象 -> 原始对象
 ```  
-这两个变量存储的是普通的响应对象和原始对象间的映射关系，是通过 `reactive` 方法产生  
+这两个变量存储的是 “普通的响应对象” 和 “原始对象” 间的映射关系，是通过 `reactive` 方法产生  
 
 ```typescript
 const rawToReadonly = new WeakMap<any, any>() // 只读原始对象 -> 只读响应对象
 const readonlyToRaw = new WeakMap<any, any>() // 只读响应对象 -> 只读原始对象
 ```  
-这两个变量存储的是只读的响应对象和原始对象间的映射关系，是通过 `readonly` 方法产生  
+这两个变量存储的是 “只读的响应对象 ” 和 “原始对象” 间的映射关系，是通过 `readonly` 方法产生  
 
 由这几个变量会引申出几个方法，下面一个一个来看  
 
@@ -69,9 +69,9 @@ rawToReadonly: Map { b -> c }
 readonlyToRaw: Map { c -> b }
 ```  
 
-当 `readonly` 的参数是一个响应对象时候，那么返回的这个对象（ 示例中的 `c` ）也应该是一个响应对象，因为它只是把原来的响应对象变为只读的了  
+当 `readonly` 的参数是一个响应对象时候，那么返回的这个 “只读响应对象”（ 示例中的 `c` ）也应该被检测为响可响应的，因为它只是把原始的响应对象变为只读的了  
 
-所以，如果参数是一个经过 `readonly` 的响应对象，会先获取它的原始对象（ 这个原始对象会是一个普通的响应对象 ），然后再检测这个普通的响应对象
+所以这一步的目的就在于处理这种情况（ 参数是一个经过 `readonly` 的普通响应对象 ），会先获取它的原始对象（ 这个原始对象会是一个普通的响应对象 ），然后实际检测的是这个普通的响应对象
 
 ### isReadonly  
 这个方法就是用来检测一个对象是否是只读响应对象，它的实现就是单纯的调用 `readonlyToRaw.has`  
@@ -88,20 +88,20 @@ function isReadonly( value: unknown ): boolean {
 ```typescript
 function toRaw<T>(observed: T): T {
   observed = readonlyToRaw.get( observed ) || observed
-  // 从 reactiveToRaw 中获取原始对象，如果没有则返回 observed 自身
+  // 从 响应 -> 原始 集合中获取原始对象，如果没有则返回 observed 自身
   return reactiveToRaw.get( observed ) || observed
 }
 ```  
 
-为什么会先从 `readonlyToRaw` 获取一次？基于上面的示例  
+为什么会先从 `readonlyToRaw` 获取一次？还是看上面的示例  
 ```typescript
 toRaw( b ) === toRaw( c );  // true
 ```  
 原理和 `isReactive` 相似，在示例中，`b` 和 `c` 的原始对象应该都是同一个，因为 `c` 只是将 `b` 变为只读  
-所以在源码中，如果参数是一个经过 `readonly` 的包装对象，会先获取它的原始对象（ 这个原始对象是一个响应对象 ），然后再获取这个响应对象的原始对象  
+所以在源码中，如果参数是一个经过 `readonly` 的 “普通响应对象”，会先获取它的原始对象（ 这个原始对象是一个响应对象 ），然后实际获取的是这个 “普通响应对象” 的原始值  
 
 ## 标记为原始对象  
-通常，普通的对象是可以进行响应化的，但是我们可以通过 `markRaw` 方法，将某个对象标记为原始类型，那么这个对象就无法再被响应化了，即 `reactive( 被标记对象 )` 的结果还是被标记对象本身，不会进行任何的代理
+通常，普通的对象是可以进行响应化的，但是我们可以通过 `markRaw` 方法，将某个对象标记为原始类型，那么这个对象就无法再被响应化了（ 在后面会看到处理过程 ），即 `reactive( 被标记对象 )` 的结果还是被标记对象本身，不会进行任何的代理
 
 ```typescript
 // 保存标记对象的集合
@@ -155,7 +155,7 @@ const canObserve = ( value: any ): boolean => {
 其中 `toRawType( value )` 就是 `Object.prototype.toString.call( value )`  
 
 ## collectionTypes  
-这个变量主要存储的是几种集合类型，在之后 `new Proxy()` 的时候，代理的操作会和非集合类型有所不同
+这个变量主要存储的是几种集合类型，在之后 `new Proxy( 原始对象, 操作 )` 的时候，集合类型和非集合类型的代理操作有所不同，所以要区分  
 
 ```typescript
 const collectionTypes = new Set<Function>([Set, Map, WeakMap, WeakSet])
@@ -192,7 +192,7 @@ function createReactiveObject(
   }
 
   // 检测 响应 -> 原始 集合中，是否存在 target，如果存在直接返回 target
-  // 这步的目的是 target 本身就是一个响应对象，那么再次创建不会产生一个新的响应对象，还是之前的那个  
+  // 这步的目的是，如果 target 本身就是一个响应对象，那么再次创建不会产生一个新的响应对象，还是返回之前的那个  
   if ( toRaw.has( target ) ) {
     return target
   }
@@ -203,7 +203,7 @@ function createReactiveObject(
   }
 
   // 设置不同处理代理的方式
-  // 如果 targer 是集合类型，则使用 collectionHandlers 作为代理，否则使用 baseHandlers 作代理
+  // 如果 target 是集合类型，则使用 collectionHandlers 作为代理，否则使用 baseHandlers 作代理
   const handlers = collectionTypes.has( target.constructor )
     ? collectionHandlers
     : baseHandlers

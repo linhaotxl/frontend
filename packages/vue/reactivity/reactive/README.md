@@ -1,5 +1,25 @@
 **为了更加清楚理解源码的意义，代码的顺序做了调整**  
 
+<!-- TOC -->
+
+- [Reactive](#reactive)
+    - [原始对象和响应对象映射关系](#原始对象和响应对象映射关系)
+        - [isReactive](#isreactive)
+        - [isReadonly](#isreadonly)
+        - [toRaw](#toraw)
+    - [标记为原始对象](#标记为原始对象)
+    - [可响应化的数据类型](#可响应化的数据类型)
+    - [canObserve](#canobserve)
+    - [collectionTypes](#collectiontypes)
+    - [createReactiveObject](#createreactiveobject)
+    - [reactive](#reactive)
+    - [shallowReactive](#shallowreactive)
+    - [readonly](#readonly)
+    - [shallowReadonly](#shallowreadonly)
+    - [注意](#注意)
+
+<!-- /TOC -->
+
 # Reactive  
 reactive 也就是响应式对象，在这个版本中是通过 `ES6` 的 `Proxy` 来实现的，我们称代理后的对象为响应对象，代理前的对象称为原始对象，如下  
 ```typescript

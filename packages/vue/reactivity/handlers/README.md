@@ -1,10 +1,11 @@
 **为了更加清楚理解源码的意义，代码的顺序做了调整**   
 
-
 - [非集合型代理](#非集合型代理)
     - [builtInSymbols](#builtinsymbols)
     - [get](#get)
         - [arrayInstrumentations](#arrayinstrumentations)
+        - [不同功能的 get](#不同功能的-get)
+    - [set](#set)
 - [集合型代理](#集合型代理)
 - [TODO](#todo)
 
@@ -297,7 +298,7 @@ function createSetter( shallow = false ) {
     // 默认情况下，如果 setter 的值是一个响应式对象，其实真正设置的是它的原始对象
     // reactive.spec.ts -> 7
     if ( !shallow ) {
-      // ②
+      // ② 将值转换为原始对象
       value = toRaw( value )
 
       // ③
@@ -352,7 +353,52 @@ observed3.bar === observed4 // true
 original3.bar === original4 // true
 ```  
 
-设置完后，`observed3` 和 `original3` 的 `bar` 实际都是 `original4`，所以第二个为 `true`，但是通过 `observed3` 访问 `bar`，会被代理，所以返回的是 `original4` 的响应对象，即 `observed4`
+设置完后，`observed3` 和 `original3` 的 `bar` 实际都是 `original4`，所以第二个为 `true`，但是通过 `observed3` 访问 `bar`，会被代理，所以返回的是 `original4` 的响应对象，即 `observed4`  
+
+2. 再看 ③ 处，这里的判断目的就是，如果对象的某个属性是一个 `ref` 对象，那么我们修改这个属性，就是修改了 `ref` 对象绑定的 `value` 值  
+
+```typescript
+const bar = ref( 1 );
+const orignal = { bar };
+const obversal = reactive( orignal );
+
+obversal.bar = 2;
+
+bar.value === 2;          // true
+orignal.bar.value === 2;  // true
+obversal.bar === 2;       // true
+```  
+
+当执行 `obversal.bar = 2` 时，在进入 `set` 函数后，发现 `oldValue` 是一个 `ref` 对象，且 `value` 不是 `ref` 对象，所以此时会直接使用 `ref` 对象的 `set` 进行设置  
+
+但如果我们设置的是一个 `ref` 对象的话，那么就相当于要替换掉原来的 `ref`，所以此时就执行正常的 `set` 的流程了，而不是走 `ref` 的 `set`  
+
+那为什么要判断 `!isArray( target )` 呢？大概是这样  
+* 如果一个 `ref` 对象存在于数组中，那么无论是 `get` 还是 `set`，获得、操作的都是那个 `ref` 对象，如果要获取、处理真正绑定的值，是需要再通过 `.value` 属性的  
+* 而对于对象就不同了，不管哪种情况，实际获得、操作的都是 `ref` 所绑定的值  
+
+所以，这种情况只能发生在对象中，而不是数组中  
+
+3. 再看 ① 处，可以看出来，如果在浅响应对象情况下，设置值的时候，不会再转换一遍原始值  
+
+```typescript
+const original = { prop: {} };
+const observal = shallowReactive( original );
+observal.prop = reactive({ name: 'IconMan' })
+isReactive(observal.prop) // true
+```  
+
+并且设置 `ref` 的时候，会直接替换掉原来的 `ref` 对象，而不是修改 `ref` 所绑定的值  
+
+```typescript
+const bar = ref(0);
+const original2 = { bar };
+const observal2 = shallowReactive( original2 );
+(observal2.bar as any) = 1;
+
+bar.value === 0;      // true
+observal2.bar === 0;  // true
+```
 
 # 集合型代理  
 

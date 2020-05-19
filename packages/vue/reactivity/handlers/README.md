@@ -6,6 +6,7 @@
         - [arrayInstrumentations](#arrayinstrumentations)
         - [不同功能的 get](#不同功能的-get)
     - [set](#set)
+        - [不同功能的 set](#不同功能的-set)
 - [集合型代理](#集合型代理)
 - [TODO](#todo)
 
@@ -272,11 +273,33 @@ observalArray.indexOf( observal1 ); // 0
 `get` 函数的主要内容就是这些，通过 `createGetter` 的两个参数可以创建不同功能的 `get`  
 
 ```typescript
-const get                =  createGetter()                // mutableHandlers 中的 get
-const shallowGet         =  createGetter( false, true )   // shallowReactiveHandlers 中的 get
-const readonlyGet        =  createGetter( true )          // readonlyHandlers 中的 get
-const shallowReadonlyGet =  createGetter( true, true )    // shallowReadonlyHandlers 中的 get
-```  
+const get                =  createGetter()
+const shallowGet         =  createGetter( false, true )
+const readonlyGet        =  createGetter( true )
+const shallowReadonlyGet =  createGetter( true, true )
+```    
+
+上面每个 `get` 都会在不同的 `handlers` 中  
+
+```typescript
+const mutableHandlers: ProxyHandler<object> = {
+  get
+}
+
+const shallowReactiveHandlers: ProxyHandler<object> = {
+  ...mutableHandlers,
+  get: shallowGet,
+}
+
+export const readonlyHandlers: ProxyHandler<object> = {
+  get: readonlyGet
+}
+
+const shallowReadonlyHandlers: ProxyHandler<object> = {
+  ...readonlyHandlers,
+  get: shallowReadonlyGet
+}
+```
 
 ## set  
 和 `get` 一样，`set` 也有一个工厂方法 `createSetter` 用来创建不同功能的 `set`，它接受一个参数  
@@ -328,6 +351,7 @@ function createSetter( shallow = false ) {
     if ( target === toRaw( receiver ) ) {
       if ( !hadKey ) {
         trigger( target, TriggerOpTypes.ADD, key, value )
+        // ⑤
       } else if ( hasChanged( value, oldValue ) ) {
         // 只有当值有变化时才可出发对应的追踪，NaN 被视为相等的值
         // effect.spec.ts -> 28 47
@@ -398,7 +422,88 @@ const observal2 = shallowReactive( original2 );
 
 bar.value === 0;      // true
 observal2.bar === 0;  // true
-```
+```  
+
+4. 再看 ④ 处，这里将 `receiver` 用 `toRaw` 转换了一次，先来看看 `receiver` 到底是什么  
+
+在代理对象的 `set` 方法中，存在第四个参数 `receiver`，指向的是操作的原始对象，即 `proxy.bar = 1`，指向 `proxy`  
+
+```typescript
+const original = {};
+const proxy = new Proxy( original, {
+  set ( target, property, value, receiver ) {
+    target[ property ] = receiver;
+  }
+});
+
+proxy.bar = 'bar';
+proxy.bar === proxy;  // true
+```  
+
+此时，因为调用的是 `proxy.bar = 'bar'`，所以 `receiver` 指向的就是 `proxy`  
+
+```typescript
+const children = { type: 'children' };
+const parent   = { type: 'parent', bar: null };
+const observalParent = new Proxy( parent, {
+  set ( target, property, value, receiver ) {
+    target[ property ] = receiver;
+  }
+});
+Object.setPrototypeOf( children, observalParent );
+
+children.bar = 'bar';
+children.bar = children;  // true
+```  
+
+由于 `children` 本身不存在 `bar` 属性，所以设置的时候会去原型链查找，即 `observalParent`，所以会进入 `observalParent` 代理的 `set` 方法中，而此时，`receiver` 参数指向的就是操作的原始对象，即 `children` 而不是 `observalParent`  
+
+弄清了 `receiver` 参数后，再看下面这个示例  
+
+```typescript
+
+```  
+
+5. 再看 ⑤ 处，这里会判断新值 `value` 与旧值 `oldValue` 是否有变化，它是根据 `===` 去判断的，同时也处理了 `NaN` 的情况，所以 `NaN` 被认为是相同的值   
+也即是说，只有当我们 `set` 的值与旧值不一样的时候，才会触发我们追踪的依赖  
+
+### 不同功能的 set  
+
+通过 `createSetter` 创建两种类型的 `set`，并且这两种都是非只读   
+
+```typescript
+const set        = createSetter()
+const shallowSet = createSetter( true )
+```  
+
+并有用在不同类型的 `handlers` 中  
+
+```typescript
+const mutableHandlers: ProxyHandler<object> = {
+  get,
+  set
+}
+
+const shallowReactiveHandlers: ProxyHandler<object> = {
+  ...mutableHandlers,
+  get: shallowGet,
+  set: shallowSet
+}
+
+export const readonlyHandlers: ProxyHandler<object> = {
+  get: readonlyGet,
+  set () {
+    return true;
+  }
+}
+
+const shallowReadonlyHandlers: ProxyHandler<object> = {
+  ...readonlyHandlers,
+  get: shallowReadonlyGet
+}
+```  
+
+对于只读的 `readonlyHandlers` 和 `shallowReadonlyHandlers` 来说，并不具备 `set`，所以重写了 `set` 函数，并且直接返回了 `true`，什么都没有做
 
 # 集合型代理  
 

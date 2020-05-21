@@ -1,5 +1,7 @@
 **为了更加清楚理解源码的意义，代码的顺序做了调整**   
 
+**在代码中会涉及到 `track` 和 `trigger` 两种操作，这两种不会放在本篇中分析，具体可以参考 [track](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#track) 和 [trigger](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#trigger)**
+
 - [非集合型代理](#非集合型代理)
     - [builtInSymbols](#builtinsymbols)
     - [get](#get)
@@ -9,8 +11,6 @@
         - [不同功能的 set](#不同功能的-set)
 - [集合型代理](#集合型代理)
 - [TODO](#todo)
-
-在代码中会涉及到 `track` 和 `trigger` 两种操作，这两种不会放在本篇中分析，具体可以参考 [track](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#track) 和 [trigger](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#trigger)
 
 经过上一节 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 的分析后，我们已经知道创建响应对象的流程了，但其中的难点就是各自的代理方式  
 

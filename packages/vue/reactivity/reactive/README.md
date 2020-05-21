@@ -1,6 +1,6 @@
 **为了更加清楚理解源码的意义，代码的顺序做了调整**  
 
-<!-- TOC -->
+**在代码中会涉及到 `track` 和 `trigger` 两种操作，这两种不会放在本篇中分析，具体可以参考 [track](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#track) 和 [trigger](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#trigger)**   
 
 - [Reactive](#reactive)
     - [原始对象和响应对象映射关系](#原始对象和响应对象映射关系)
@@ -17,8 +17,6 @@
     - [readonly](#readonly)
     - [shallowReadonly](#shallowreadonly)
     - [注意](#注意)
-
-<!-- /TOC -->
 
 # Reactive  
 reactive 也就是响应式对象，在这个版本中是通过 `ES6` 的 `Proxy` 来实现的，我们称代理后的对象为响应对象，代理前的对象称为原始对象，如下  

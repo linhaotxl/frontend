@@ -4,7 +4,7 @@
 
 这两种操作是相互依赖的，类似于 “订阅-发布”，其中 `track` 用来收集依赖，而 `trigger` 用来触发依赖  
 
-依赖可以理解为，期望某个数据发生变化时，能做一些额外的处理，例如  
+依赖可以理解为，期望某个数据发生变化时，所做一些额外的处理，例如  
 
 ```typescript
 let count;
@@ -19,7 +19,7 @@ observal.count = 2;
 dummy === 2;  // true
 ```  
 
-这段代码的意思是，回调依赖了 `count` 和 `name` 属性，只有两个任意一个发生变化时，就会执行回调  
+这段代码的意思是，“额外处理” 依赖了 `count` 和 `name` 属性，只有两个任意一个发生变化时，就会执行 
 
 # 前置点  
 
@@ -93,7 +93,7 @@ function resetTracking() {
 ```
 
 # effect  
-`effect` 函数就是用来产生依赖的 “额外处理”  
+`effect` 函数就是用来产生依赖的 “额外处理”，它有两个参数  
 1. 回调，也就是具体的 “额外处理” 的内容  
 2. 配置对象  
 
@@ -104,7 +104,7 @@ interface ReactiveEffect<T = any> {
     (...args: any[]): T
     _isEffect: true                 // 标识是否是 effect 对象
     id: number                      // 唯一标识
-    active: boolean         
+    active: boolean                 // 是否处于激活状态
     raw: () => T                    // effect 对象的原始函数，即传递的第一个参数
     deps: Array<Dep>                // 所有依赖的集合
     options: ReactiveEffectOptions  // effect 对象的配置，即传递的第二个参数

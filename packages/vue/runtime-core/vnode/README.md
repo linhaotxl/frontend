@@ -89,7 +89,7 @@ normalizeStyle([ { width: 100 }, { height: 100 }, 100 ]);       // { width: 100,
 
 ## normalizeChildren  
 
-这个方法主要是根据子节点，来设置 `vNode` 的 `children` 和 `shapeFlag` 这两个属性  
+这个方法主要是根据子节点，来设置 `vNode` 的 `children` 和 `shapeFlag` 这两个属性，`shapeFlag` 可以参考 [这里](#shapeFlag)   
 
 ```typescript
 function normalizeChildren( vnode: VNode, children: unknown ) {
@@ -99,17 +99,18 @@ function normalizeChildren( vnode: VNode, children: unknown ) {
   const { shapeFlag } = vnode
 
   if (children == null) {
+    // 没有子节点
     children = null
-  } else if (isArray(children)) {
+  } else if ( isArray( children ) ) {
     // 子节点是数组
     type = ShapeFlags.ARRAY_CHILDREN
-  } else if (typeof children === 'object') {
+  } else if ( typeof children === 'object' ) {
     // Normalize slot to plain children
     if (
       (shapeFlag & ShapeFlags.ELEMENT || shapeFlag & ShapeFlags.TELEPORT) &&
       (children as any).default
     ) {
-      normalizeChildren(vnode, (children as any).default())
+      normalizeChildren( vnode, (children as any).default() )
       return
     } else {
       type = ShapeFlags.SLOTS_CHILDREN
@@ -119,13 +120,13 @@ function normalizeChildren( vnode: VNode, children: unknown ) {
         ;(children as RawSlots)._ctx = currentRenderingInstance
       }
     }
-  } else if (isFunction(children)) {
+  } else if ( isFunction( children ) ) {
     // 子节点是函数
     children = { default: children, _ctx: currentRenderingInstance }
     type = ShapeFlags.SLOTS_CHILDREN
   } else {
     // 子节点是字符串
-    children = String(children)
+    children = String( children )
     // force teleport children to array so it can be moved around
     if (shapeFlag & ShapeFlags.TELEPORT) {
       type = ShapeFlags.ARRAY_CHILDREN
@@ -139,7 +140,14 @@ function normalizeChildren( vnode: VNode, children: unknown ) {
   vnode.children = children as VNodeNormalizedChildren
   vnode.shapeFlag |= type
 }
-```
+```  
+
+TODO  
+
+这个方法总结如下   
+1. 没有子节点: `shapeFlag` 保持原状，`children` 为 `null`  
+2. 子节点为数组(只要子节点不为文本就会是数组): `shapeFlag` 会加上 `ShapeFlags.ARRAY_CHILDREN`，`children` 就是子节点数组  
+<!-- 3. 子节点为函数 -->
 
 ## extend  
 这就是一个简单的扩展方法，接受两个对象作为参数，会将第二个参数的所有属性添加到第一个参数中，最后返回第一个参数  
@@ -161,7 +169,7 @@ const extend = <T extends object, U extends object>(
 这是一个合并 `props` 的方法，主要处理了这几种情况  
 1. `class`: 将各种情况的 `class` 累加
 2. `style`: 将 `style` 对象进行合并
-3. 事件: 若存在两个以上，则范进数组
+3. 事件: 若存在两个以上，则放进数组
 4. 其他: 除了以上三种情况外，剩余的都是直接赋值合并
 
 ```typescript
@@ -228,63 +236,71 @@ export function render(_ctx, _cache) {
 
 先来解释下上面出现的 `_openBlock` 和 `_createBlock` 中的 `block` 的意义  
 
-`block` 可以理解为一个区域，由数组实现，保存的是会变化的节点，例如 `<div>{{ name }}</div>` 这样的，而不是一个静态节点 `<div>name</div>`，保存下来的目的就是为了在之后 `diff` 的时候，只需要对这些需要变化的节点进行 `diff`，从而避免不必要的操作  
+`block` 可以理解为一个区域，由数组实现，保存的是会变化的节点，也可以理解为需要追踪的节点，例如 `<div>{{ name }}</div>` 这样的标签，因为 `name` 是随时会发生变化，而不是一个静态节点 `<div>name</div>`  
+保存下来的目的就是为了在之后 `diff` 的时候，只需要对这些追踪的节点进行 `diff`，从而避免不必要的操作  
 
 每个 `block` 都会有一个根节点，会将当前的 `block` 挂载到根节点上面
 
-上面代码中的三个方法的作用大致如下，详细会在后面介绍到  
+上面代码中的三个方法的作用大致使用流程如下  
+1. 先开启一个 `block` 区域  
+2. 将需要追踪的节点保存在当前的 `block` 中  
+3. 创建根节点，并将当前 `block` 内所有需要追踪的节点挂载到根节点上   
 
-1. `_openBlock`: 开启一个 `block` 区域
-2. `_createVNode`: 创建具体 `vNode` 对象的方法  
-3. `_createBlock`: 创建一个根节点，基于 `_createVNode` 实现   
+所以，一个 `block` 的生命周期就是从 `open` 开始，直至创建完根节点后  
 
+## openBlock  
+
+这个函数主要就是开启一个 `block` 区域，从下面代码可以看出，`block` 就是一个数组  
+
+```typescript
+function openBlock( disableTracking = false ) {
+  blockStack.push( (currentBlock = disableTracking ? null : []) )
+}
+```  
+
+这里涉及到两个全局变量  
+1. `blockStack` 是存储 `block` 的栈，每次开启都会推入栈中，然后在 `createBlock` 中才会释放  
+2. `currentBlock` 是当前开启的 `block`，在 `createNode` 中需要将追踪的节点保存在当前 `block` 中  
+   
 ## patchFlag  
-上面说过，`<div>{{ name }}</div>` 这种是变化节点，但是变化的类型有很多，这只是其中一种，先来看所有的变化类型  
+上面说过，`<div>{{ name }}</div>` 这种是发生变化的节点，但是变化的类型有很多，这只是其中一种，先来看所有的变化类型  
 
 ```typescript
 const enum PatchFlags {
-  // 文本类型，
+  // 文本类型，例如 <div>{{ name }}</div>
   TEXT = 1,
-
-  // 动态 class
+  // 动态 class，例如 <div :class={ bar: true }>text</div>
   CLASS = 1 << 1,
-
-  // 动态样式
+  // 动态样式，例如 <div :style={ width: 100 }>text</div>
   STYLE = 1 << 2,
-
   // 除了 class 和 style 之外的动态属性
   PROPS = 1 << 3,
-
   FULL_PROPS = 1 << 4,
-
   HYDRATE_EVENTS = 1 << 5,
-
   STABLE_FRAGMENT = 1 << 6,
-
   KEYED_FRAGMENT = 1 << 7,
-
   UNKEYED_FRAGMENT = 1 << 8,
-
   NEED_PATCH = 1 << 9,
-
   DYNAMIC_SLOTS = 1 << 10,
-
   HOISTED = -1,
-
   BAIL = -2
 }
 ```  
 
-每种类型都属性二进制，所以之后的累加，判断等都是通过位运算符实现的  
+每种类型都是性二进制，所以之后的累加，判断等操作都是通过位运算符实现的  
+
+## shapeFlag  
 
 ## _createVNode  
 
-这个方法用来创建一个 `vNode` 节点，接受五个参数  
+这个方法用来创建一个具体的 `vNode` 节点，接受五个参数  
 
 1. 节点类型  
-2. 节点属性  
-3. 子节点  
-4. 需要变化的类型  
+    1. 对于原生 `DOM` 来说，就是标签名称，例如 `'div'`  
+    2. 对于 Class Component 来说，就是 Class 本身，并且含有静态属性 `__vccOpts`
+2. 节点属性 `props`  
+3. 子节点 
+4. 需要变化的类型，就是上面 `patchFlag` 几种类型，若存在多个则由 按位或 合成
 5. 动态属性
 
 ```typescript
@@ -301,7 +317,7 @@ function _createVNode(
   }
 
   // 处理 Class Component 情况
-  if (isFunction(type) && '__vccOpts' in type) {
+  if ( isFunction(type) && '__vccOpts' in type ) {
     type = type.__vccOpts
   }
 
@@ -377,6 +393,7 @@ function _createVNode(
   normalizeChildren(vnode, children)
 
   // ④
+  // 这里主要是处理需要追踪的节点，将 vnode push 到当前 block 中
   // presence of a patch flag indicates this node needs patching on updates.
   // component nodes also should always be patched, because even if the
   // component doesn't need to update, it needs to persist the instance on to
@@ -397,4 +414,53 @@ function _createVNode(
 
   return vnode
 }
-```
+```    
+
+1. 先看 ④ 处，这里就是将可变化的节点放进当前 `block` 中，其中涉及到一个变量 [shouldTrack](#shouldTrack)  
+
+可以看出，如果当前创建的节点不是根节点，并且不是
+
+## createBlock  
+
+这个方法创建一个根节点，虽然根节点也是一个 `vNode` 对象，但是它和非根节点还是有一定区别的，所以它的参数和 `creareNode` 一模一样  
+
+```typescript
+function createBlock(
+  type: VNodeTypes | ClassComponent,
+  props?: { [key: string]: any } | null,
+  children?: any,
+  patchFlag?: number,
+  dynamicProps?: string[]
+): VNode {
+  // avoid a block with patchFlag tracking itself
+  shouldTrack--
+  // 创建根节点对应的 vNode 对象
+  const vnode = createVNode(type, props, children, patchFlag, dynamicProps)
+  shouldTrack++
+
+  // 将当前的 block 挂载到根节点上
+  vnode.dynamicChildren = currentBlock || EMPTY_ARR
+
+  // 释放 block 栈，并更新当前 block 为上一个
+  blockStack.pop()
+  currentBlock = blockStack[blockStack.length - 1] || null
+
+  // a block is always going to be patched, so track it as a child of its
+  // parent block
+  if (currentBlock) {
+    currentBlock.push(vnode)
+  }
+
+  return vnode
+}
+```  
+
+## shouldTrack  
+这是一个全局变量，它的值是数值，每次创建一个根节点，就会 - 1，创建完成后再 + 1  
+
+因为在 `createNode` ④ 中，会判断 `shouldTrack` 是否大于 `0`
+  * 如果大于 `0` 则说明当前创建的不是根节点，则可能会将节点存入 `block` 中
+  * 如果不是，则说明创建的是根节点，不想要存入 `block` 中  
+
+**所以，这个变量可以用来区分当前创建的节点是否是根节点**   
+

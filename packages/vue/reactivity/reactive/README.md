@@ -25,7 +25,7 @@ const 响应对象 = new Proxy( 原始对象, { /**/ } );
 ```  
 
 ## 原始对象和响应对象映射关系  
-在源码中，定义了几个变量，用来存储 ”原始对象“ 和 ”响应对象“ 的关系，它们都是 `Map` 的实例，所以 `key` 都是对象类型  
+在源码中，定义了几个变量，用来存储 ”原始对象“ 和 ”响应对象“ 的关系，它们都是 `Map` 的实例，所以 `key` 都是 “原始对象” 或者 “响应对象”  
 
 ```typescript
 const rawToReactive = new WeakMap<any, any>() // 原始对象 -> 响应对象
@@ -51,7 +51,7 @@ function isReactive( value: unknown ): boolean {
 }
 ```  
 
-只要存在于 `reactiveToRaw` 集合中的对象都被认为是响应对象，但为什么会先从 `readonlyToRaw` 获取一次呢？先看下面这个示例  
+只要存在于 `reactiveToRaw` 集合中的对象都被认为是响应对象，所以，`readonly` 生成的对象并不属于响应式，但为什么会先从 `readonlyToRaw` 获取一次呢？先看下面这个示例  
 ```typescript
 const a = { n: 1 };
 const b = reactive( a );
@@ -99,7 +99,7 @@ toRaw( b ) === toRaw( c );  // true
 所以在源码中，如果参数是一个经过 `readonly` 的 “普通响应对象”，会先获取它的原始对象（ 这个原始对象是一个响应对象 ），然后实际获取的是这个 “普通响应对象” 的原始值  
 
 ## 标记为原始对象  
-通常，普通的对象是可以进行响应化的，但是我们可以通过 `markRaw` 方法，将某个对象标记为原始类型，那么这个对象就无法再被响应化了（ 在后面会看到处理过程 ），即 `reactive( 被标记对象 )` 的结果还是被标记对象本身，不会进行任何的代理
+通常，普通的对象是可以进行响应化的，但是我们可以通过 `markRaw` 方法，将某个对象标记为原始类型，那么这个对象就无法再被响应化了（ 在 [canObserve](#canObserve) 中进行处理 ），即 `reactive( 被标记对象 )` 的结果还是被标记对象本身，不会进行任何的代理
 
 ```typescript
 // 保存标记对象的集合
@@ -307,11 +307,11 @@ function shallowReadonly<T extends object>( target: T ): Readonly<{ [K in keyof 
 ```  
 
 ## 注意  
-1. 在 `reactive` 方法中，首先会有一个判断条件，目的就在处理参数是响应对象的情况，看下面这个示例  
+1. 在 `reactive` 方法中，首先会有一个判断条件，目的就在处理参数是 “只读响应对象” 的情况，看下面这个示例  
 
 ```typescript
 const original = {};
-const readObserval = reaconly( original );
+const readObserval = readonly( original );
 const observal = reactive( readObserval );
 isReadonly( observal ); // true
 ```  

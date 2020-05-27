@@ -16,7 +16,7 @@
 通过 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 的介绍我们知道，`reactive` 的参数必须是一个对象，那如果我们要对一个原始数据（ 称为原始值 ）进行响应呢，此时就要用 `ref` 了，但是我们没办法对一个原始值进行响应式，所以只能将原始值放进对象里，并且通过 `value` 属性访问、设置，这就是 `ref` 的作用  
 
 其实 `ref` 的参数也可以是对象，只不过处理方法有所不同  
-1. 参数为原始值: 直接通过 `.value` 获取到原始值  
+1. 参数为原始值: 直接通过 `.value` 获取、设置到原始值  
 2. 参数为对象: 会将对象进行 `reactive` 响应化，再通过 `.value` 获取，此时获取的就是响应对象
 
 ## isRef  
@@ -29,9 +29,10 @@ function isRef( r: any ): r is Ref {
 ```   
 
 ## convert  
-上面说的，如果参数为对象，会将这个对象 `reactive` 响应化，就是在这一步处理的   
+上面说的，如果参数为对象，会将这个对象 `reactive` 响应化，就是通过这个函数处理   
 
 ```typescript
+// 如果参数是对象，则使用 reactive 转换
 const convert = <T extends unknown>( val: T ): T => isObject( val ) ? reactive( val ) : val
 ```
 
@@ -57,7 +58,7 @@ function shallowRef( value ) {
 
 ```typescript
 function createRef( rawValue: unknown, shallow = false ) {
-  // 对一个 ref 对象，再次进行 ref 响应，得到的还是原来的那个 ref 对象
+  // 如果参数是一个 ref 对象，直接返回
   if ( isRef( rawValue ) ) {
     return rawValue
   }
@@ -108,8 +109,8 @@ function createRef( rawValue: unknown, shallow = false ) {
 
 **以下的情况基于原始值为对象讨论**  
 
-对于非浅响应来说，会将原始值转换为 `reactive` 响应对象，如果修改了它的值，就会触发追踪的依赖  
-对于浅响应来说，原始值就是那个对象，不会转换为响应对象，所以修改的时候是不会触发追踪的依赖  
+* 对于非浅响应来说，会将原始值转换为 `reactive` 响应对象，`.value` 实际访问的就是响应对象  
+* 对于浅响应来说，原始值就是那个对象，不会转换为响应对象，`.value` 实际访问的是原始值  
 
 非浅响应  
 
@@ -124,7 +125,9 @@ effect(() => {
 
 sref.value.count = 2;
 
-dummy === 2;  // true
+sref.value === original;  // false
+isReactive( sref.value ); // true
+dummy === 2;              // true
 ```  
 
 浅响应  
@@ -140,12 +143,13 @@ effect(() => {
 
 sref.value.count = 2;
 
-dummy === 0;  // true
+sref.value === original;  // true
+dummy === 0;              // true
 ```  
 
 2. 再看 ③ 处，这里是 `ref` 的 `value` 属性，可以看到，每次访问的时候，都会追踪 `value` 属性，因为 `ref` 对象的 `value` 是固定不变的，所以这里就写死了  
 
-3. 再看 ④ 处，这里会通过 `toRaw` 将原始值转换一次，这样做的目的就是，当我们设置的是一个响应对象的时候，实际设置的是响应对象的原始值，这个逻辑和 [reactive - set]() 的逻辑是一样的  
+3. 再看 ④ 处，这里会通过 `toRaw` 将原始值转换一次，这样做的目的就是，当我们设置的是一个响应对象的时候，实际设置的是响应对象的原始值，这个逻辑和 [reactive - set](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/handlers#set) 的逻辑是一样的  
 
 ## triggerRef   
 这个方法会主动触发 `value`追踪的依赖，而不是又 `set` 被动触发的。像上面浅响应的示例中，由于浅响应的 `set` 不会导致触发追踪的依赖，所以可以通过这个方法手动触发  

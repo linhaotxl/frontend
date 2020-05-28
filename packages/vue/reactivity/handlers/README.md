@@ -4,11 +4,14 @@
 
 - [非集合型代理](#非集合型代理)
     - [builtInSymbols](#builtinsymbols)
+    - [ITERATE_KEY](#iterate_key)
     - [get](#get)
         - [arrayInstrumentations](#arrayinstrumentations)
         - [不同功能的 get](#不同功能的-get)
     - [set](#set)
         - [不同功能的 set](#不同功能的-set)
+    - [ownKeys](#ownkeys)
+    - [has](#has)
 - [集合型代理](#集合型代理)
 - [TODO](#todo)
 
@@ -31,7 +34,7 @@
 4. `deleteProperty`: 删除属性，`delete proxyObj[propKey]`  
 5. `ownKeys`: 迭代属性  
 
-在 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 源码中，我们知道上述 6 种代理方式都作为 `new Proxy` 的第二个参数，所以它们都是一个对象，所以都含有 `get`、`set`、`has`、`deleteProperty` 和 `ownKeys` 这五种属性，接下来就一个一个来看  
+在 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 源码中，我们知道上述 6 种代理方式都作为 `new Proxy` 的第二个参数，所以它们都是一个对象，都含有 `get`、`set`、`has`、`deleteProperty` 和 `ownKeys` 这五种属性，接下来就一个一个来看  
 
 # 非集合型代理  
 
@@ -44,7 +47,14 @@ const builtInSymbols = new Set(
     .map( key => (Symbol as any)[key] )
     .filter( isSymbol )
 )
-```
+```  
+
+## ITERATE_KEY  
+这个变量代表了遍历的操作类型，是一个 `Symbol` 值，用于 [ownKeys](#ownKeys)  
+
+```typescript
+const ITERATE_KEY = Symbol(__DEV__ ? 'iterate' : '');
+```  
 
 ## get   
 `get` 在源码中会有一个工厂方法 `createGetter` 来创建不同的功能 `get`，这个方法接收两个参数  
@@ -81,7 +91,7 @@ function createGetter( isReadonly = false, shallow = false ) {
 
     // ③
     // 检测属性值是否是 ref 对象
-    // 如果原始对象是数组，则获取到的就是 ref 对象；否则直接获取到的就是 ref.value
+    // 如果原始对象是数组，则获取到的就是 ref 对象；否则直接获取到的就是原始值
     // const observal = reactive( { b: ref( 0 ) } );
     // observal.b -> 0  observal.b  是一个 ref 对象，直接获取 ref 的原始值
     if ( isRef( res ) ) {
@@ -100,8 +110,6 @@ function createGetter( isReadonly = false, shallow = false ) {
 
     // 检测结果是否是对象
     return isObject( res )
-      // 是的话，需要对其进行响应式，这也就是 vue3.0 中，只有在 getter 的时候才会对嵌套的对象进行响应化
-      // 而不是一开始就递归整个对象
       ? isReadonly
         ? readonly( res )
         : reactive( res )
@@ -253,7 +261,7 @@ const index = arr.indexOf( obj )
 
 此时，获取到的是一个对象，而在 `get` 函数最后，会检测获取到的值是否是对象，所以，我们实际获取到的是一个经过 `reactive` 的响应对象，而不是原来的 `obj`，同理，第 `1` 个元素也是如此，所以 `index` 实际是 `-1`  
 
-`arrayInstrumentations` 的作用就是解决这个问题存在的，接下来具体看它的实现  
+`arrayInstrumentations` 的作用就是解决这个问题存在的  
 
 2. 首先看 ① 处的 `this`，这个 `this` 具体指向的是什么？还是基于上面的示例  
 在 `get` 函数中，我们只是通过 `return Reflect.get( arrayInstrumentations, key, receiver )` 获得了具体的方法，而真正调用则是由 `arr` 发起的，所以 `this` 其实就是指向 `arr`（ 注意，这里的 `arr` 是响应对象 ）  
@@ -273,33 +281,11 @@ observalArray.indexOf( observal1 ); // 0
 `get` 函数的主要内容就是这些，通过 `createGetter` 的两个参数可以创建不同功能的 `get`  
 
 ```typescript
-const get                =  createGetter()
-const shallowGet         =  createGetter( false, true )
-const readonlyGet        =  createGetter( true )
-const shallowReadonlyGet =  createGetter( true, true )
+const get                =  createGetter()              // 普通响应对象
+const shallowGet         =  createGetter( false, true ) // 普通浅响应对象
+const readonlyGet        =  createGetter( true )        // 只读响应对象
+const shallowReadonlyGet =  createGetter( true, true )  // 只读浅响应对象
 ```    
-
-上面每个 `get` 都会在不同的 `handlers` 中  
-
-```typescript
-const mutableHandlers: ProxyHandler<object> = {
-  get
-}
-
-const shallowReactiveHandlers: ProxyHandler<object> = {
-  ...mutableHandlers,
-  get: shallowGet,
-}
-
-export const readonlyHandlers: ProxyHandler<object> = {
-  get: readonlyGet
-}
-
-const shallowReadonlyHandlers: ProxyHandler<object> = {
-  ...readonlyHandlers,
-  get: shallowReadonlyGet
-}
-```
 
 ## set  
 和 `get` 一样，`set` 也有一个工厂方法 `createSetter` 用来创建不同功能的 `set`，它接受一个参数  
@@ -364,7 +350,7 @@ function createSetter( shallow = false ) {
 }
 ```  
 
-1. 首先看 ② 处，当设置一个值为响应式对象的时候，我们其实设置的是它的原始值  
+1. 首先看 ② 处，对于非浅响应的对象，当 `set` 的值是响应式对象的时候，我们其实设置的是它的原始值  
 
 ```typescript
 const original3: any = { foo: 1 }
@@ -377,9 +363,9 @@ observed3.bar === observed4 // true
 original3.bar === original4 // true
 ```  
 
-设置完后，`observed3` 和 `original3` 的 `bar` 实际都是 `original4`，所以第二个为 `true`，但是通过 `observed3` 访问 `bar`，会被代理，所以返回的是 `original4` 的响应对象，即 `observed4`  
+设置完后，`original3` 的 `bar` 实际都是 `original4`，所以第二个为 `true`，但是通过 `observed3` 访问 `bar`，会被代理，所以返回的是 `original4` 的响应对象，即 `observed4`  
 
-2. 再看 ③ 处，这里的判断目的就是，如果对象的某个属性是一个 `ref` 对象，那么我们修改这个属性，就是修改了 `ref` 对象绑定的 `value` 值  
+2. 再看 ③ 处，这里的判断目的就是，如果非浅响应对象的某个属性是一个 `ref` 对象，那么我们修改这个属性，就是修改了 `ref` 对象绑定的 `value` 值  
 
 ```typescript
 const bar = ref( 1 );
@@ -395,7 +381,7 @@ obversal.bar === 2;       // true
 
 当执行 `obversal.bar = 2` 时，在进入 `set` 函数后，发现 `oldValue` 是一个 `ref` 对象，且 `value` 不是 `ref` 对象，所以此时会直接使用 `ref` 对象的 `set` 进行设置  
 
-但如果我们设置的是一个 `ref` 对象的话，那么就相当于要替换掉原来的 `ref`，所以此时就执行正常的 `set` 的流程了，而不是走 `ref` 的 `set`  
+但如果我们设置的是一个新的 `ref` 对象的话，那么就相当于要替换掉原来的 `ref`，所以此时就执行正常的 `set` 的流程了，而不是走 `ref` 的 `set` 的流程  
 
 那为什么要判断 `!isArray( target )` 呢？大概是这样  
 * 如果一个 `ref` 对象存在于数组中，那么无论是 `get` 还是 `set`，获得、操作的都是那个 `ref` 对象，如果要获取、处理真正绑定的值，是需要再通过 `.value` 属性的  
@@ -403,7 +389,7 @@ obversal.bar === 2;       // true
 
 所以，这种情况只能发生在对象中，而不是数组中  
 
-3. 再看 ① 处，可以看出来，如果在浅响应对象情况下，设置值的时候，不会再转换一遍原始值  
+3. 再看 ① 处，如果在浅响应对象情况下，设置值的时候，不会再转换一遍原始值  
 
 ```typescript
 const original = { prop: {} };
@@ -461,8 +447,31 @@ children.bar = children;  // true
 弄清了 `receiver` 参数后，再看下面这个示例  
 
 ```typescript
+let dummy, parentDummy, hiddenValue: any
+const obj = reactive<{ prop?: number; type: string }>({ type: 'children' })
+const parent = reactive({
+  type: 'parent',
+  set prop(value) {
+    hiddenValue = value
+  },
+  get prop() {
+    return hiddenValue
+  }
+})
 
+Object.setPrototypeOf(obj, parent)
+
+effect(() => {
+  dummy = obj.prop
+})
+effect(() => {
+  parentDummy = parent.prop
+})
+
+toRaw(obj).prop = 4
 ```  
+
+当执行最后一行代码时，执行到 `set` 方法中，`target` 是 `parent` 的原始对象，而 `receiver` 则是 `obj`，所以这里的判断目的是，只有当设置的是对象本身的属性，才会进行 `trigger` 触发追踪  
 
 5. 再看 ⑤ 处，这里会判断新值 `value` 与旧值 `oldValue` 是否有变化，它是根据 `===` 去判断的，同时也处理了 `NaN` 的情况，所以 `NaN` 被认为是相同的值   
 也即是说，只有当我们 `set` 的值与旧值不一样的时候，才会触发我们追踪的依赖  
@@ -472,40 +481,116 @@ children.bar = children;  // true
 通过 `createSetter` 创建两种类型的 `set`，并且这两种都是非只读   
 
 ```typescript
-const set        = createSetter()
-const shallowSet = createSetter( true )
+const set        = createSetter()       // 普通响应对象
+const shallowSet = createSetter( true ) // 普通浅响应对象
 ```  
 
-并有用在不同类型的 `handlers` 中  
+对于只读的 `readonlyHandlers` 和 `shallowReadonlyHandlers` 来说，并不具备 `set`，所以重写了 `set` 函数，并且直接返回了 `true`，什么都没有做  
+
+## ownKeys  
+`ownKeys` 会拦截遍历的操作，当触发下面这些操作时，就会追踪一个遍历的属性 [ITERATE_KEY](#ITERATE_KEY)
+1. `Object.getOwnPropertyNames`: 获取对象自身的所有属性，包括不可枚举属性，但不包括 `Symbol` 属性
+2. `Object.getOwnPropertySymbols`: 获取对象自身所有的 `Symbol` 属性
+3. `Object.keys`: 
+4. `for...in`  
 
 ```typescript
+function ownKeys( target: object ): (string | number | symbol)[] {
+  track( target, TrackOpTypes.ITERATE, ITERATE_KEY )
+  return Reflect.ownKeys( target )
+}
+```
+
+## has  
+`has` 会拦截 `prop in obj` 操作，当触发 `in` 操作时，就会追踪指定的属性  
+
+```typescript
+function has( target: object, key: string | symbol ): boolean {
+  const result = Reflect.has( target, key )
+  track( target, TrackOpTypes.HAS, key )
+  return result
+}
+```  
+
+## deleteProperty  
+`deleteProperty` 会拦截 `delete obj[prop]` 操作，就会追踪指定的属性  
+
+```typescript
+function deleteProperty(target: object, key: string | symbol): boolean {
+  const hadKey = hasOwn( target, key )
+  const oldValue = (target as any)[key]
+  const result = Reflect.deleteProperty( target, key )
+  // 删除成功，并且删除的是一个已存在的属性才会触发追踪的依赖
+  if (result && hadKey) {
+    trigger(target, TriggerOpTypes.DELETE, key, undefined, oldValue)
+  }
+  return result
+}
+```  
+
+## 代理对象总和  
+上面就是所有的代理方法，在非集合型的 `handlers` 中，都用到了这几种  
+
+```typescript
+// 普通响应对象
 const mutableHandlers: ProxyHandler<object> = {
   get,
-  set
+  set,
+  deleteProperty,
+  has,
+  ownKeys
 }
+```  
 
+```typescript
+// 普通浅响应对象
 const shallowReactiveHandlers: ProxyHandler<object> = {
   ...mutableHandlers,
   get: shallowGet,
   set: shallowSet
 }
+```  
 
-export const readonlyHandlers: ProxyHandler<object> = {
+```typescript
+// 只读响应对象
+const readonlyHandlers: ProxyHandler<object> = {
   get: readonlyGet,
-  set () {
-    return true;
+  has,
+  ownKeys,
+  set(target, key) {
+    // 更新不做任何操作
+    if (__DEV__) {
+      console.warn(
+        `Set operation on key "${String(key)}" failed: target is readonly.`,
+        target
+      )
+    }
+    return true
+  },
+  deleteProperty(target, key) {
+    // 删除不做任何操作
+    if (__DEV__) {
+      console.warn(
+        `Delete operation on key "${String(key)}" failed: target is readonly.`,
+        target
+      )
+    }
+    return true
   }
 }
+```  
 
+```typescript
+// 只读浅响应对象
 const shallowReadonlyHandlers: ProxyHandler<object> = {
   ...readonlyHandlers,
   get: shallowReadonlyGet
 }
-```  
-
-对于只读的 `readonlyHandlers` 和 `shallowReadonlyHandlers` 来说，并不具备 `set`，所以重写了 `set` 函数，并且直接返回了 `true`，什么都没有做
+```
 
 # 集合型代理  
 
 # TODO  
-1. `arrayInstrumentations` 中的 `track` 追踪每个元素 
+1. `arrayInstrumentations` 中的 `track` 追踪每个元素
+2. `createGetter` 中浅下响应式为什么也要追踪
+3. `createGetter` 中，如果值是 `ref` 且 `target` 是数组，为什么还要追踪

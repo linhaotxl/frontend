@@ -12,6 +12,8 @@
         - [不同功能的 set](#不同功能的-set)
     - [ownKeys](#ownkeys)
     - [has](#has)
+    - [deleteProperty](#deleteproperty)
+    - [代理对象总和](#代理对象总和)
 - [集合型代理](#集合型代理)
 - [TODO](#todo)
 

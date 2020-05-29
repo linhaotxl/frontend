@@ -1,5 +1,22 @@
 **为了更加清楚理解源码的意义，代码的顺序做了调整**  
 
+- [前置知识](#前置知识)
+    - [targetMap](#targetmap)
+    - [shouldTrack 和 trackStack](#shouldtrack-和-trackstack)
+        - [enableTracking](#enabletracking)
+        - [pauseTracking](#pausetracking)
+        - [resetTracking](#resettracking)
+- [effect](#effect)
+    - [effect 结构](#effect-结构)
+    - [createReactiveEffect](#createreactiveeffect)
+    - [effect](#effect-1)
+        - [用到的全局变量](#用到的全局变量)
+            - [effectStack](#effectstack)
+            - [activeEffect](#activeeffect)
+    - [track](#track)
+    - [cleanup](#cleanup)
+    - [trigger](#trigger)
+
 之前说过的 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 和 [ref](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/ref) 都是作响应式的，那具体响应式是如何做到的，就在于 `get` 中的 `track` 以及 `set` 中的 `trigger`  
 
 这两种操作是相互依赖的，类似于 “订阅-发布”，其中 `track` 用来收集依赖，而 `trigger` 用来触发依赖  
@@ -93,11 +110,6 @@ function resetTracking() {
 ```
 
 # effect  
-`effect` 函数就是用来产生依赖的 “额外处理”，它有两个参数  
-1. 回调，也就是具体的 “额外处理” 的内容  
-2. 配置对象  
-
-`effect` 函数最后会返回一个 `effect` 对象，这个 `effect` 对象也是一个函数，但它并不是我们传的第一个参数，而是将其包装了一层，先来看看 `effect` 对象的结构   
 
 ## effect 结构  
 通过下面的 [createReactiveEffect](#createReactiveEffect) 函数可以创建一个 `effect` 对象，先来看看它的结构  
@@ -148,26 +160,25 @@ function createReactiveEffect<T = any>(
       return options.scheduler ? undefined : fn( ...args )
     }
 
-    // ②
+    // ② 
     if ( !effectStack.includes( effect ) ) {
-      // ③
-      // 清除所有的追踪，fn 可能存在逻辑判断，所以需要重新计算追踪的属性
+      // ③ 清除所有的追踪，fn 可能存在逻辑判断，所以需要重新计算追踪的属性
       cleanup( effect )
       try {
-        // ④
+        // ④ 开启追踪
         enableTracking()
-        // ⑤
+        // ⑤ effect 入栈
         effectStack.push(effect)
-        // ⑥
+        // ⑥ 设置 activeEffect 为当前 effect
         activeEffect = effect
-        // ⑦
+        // ⑦ 执行 fn 回调
         return fn(...args)
       } finally {
-        // ⑧
+        // ⑧ effect 出栈
         effectStack.pop()
-        // ⑨
+        // ⑨ 恢复追踪
         resetTracking()
-        // 🔟
+        // 🔟 恢复 activeEffect 为栈中的最后一个
         activeEffect = effectStack[effectStack.length - 1]
       }
     }
@@ -212,7 +223,7 @@ export function effect<T = any>(
 }
 ```    
 
-1. 在 `effect` ① 中，如果参数本身就是一个 `effect` 对象，那么新创建的 `effect` 对象和旧的原始函数指向的是同一个  
+1. 在 `effect` 函数 ① 中，如果参数本身就是一个 `effect` 对象，那么新创建的 `effect` 对象和旧的原始函数指向的是同一个  
 
 ### 用到的全局变量  
 
@@ -224,7 +235,7 @@ const effectStack: ReactiveEffect[] = []
 ```
 
 #### activeEffect  
-这个变量保存的是当前正在执行的 `effect` 对象，在 [createReactiveEffect](#createReactiveEffect) ⑥ 和 🔟 可以看到，执行 `fn` 前后会设置正在执行的 effect` 和恢复上一个   
+这个变量保存的是当前正在执行的 `effect` 对象，在 [createReactiveEffect](#createReactiveEffect) ⑥ 和 🔟 可以看到，执行 `fn` 前后会设置为当前正在执行的 `effect` 和恢复上一个   
 
 ```typescript
 let activeEffect: ReactiveEffect | undefined
@@ -252,13 +263,13 @@ function track(target: object, type: TrackOpTypes, key: unknown) {
     return
   }
 
-  // ②
+  // ② 获取原始对象对应的 Map
   let depsMap = targetMap.get( target )
   if ( !depsMap ) {
-    targetMap.set(  target, (depsMap = new Map()))
+    targetMap.set( target, (depsMap = new Map()))
   }
 
-  // ③
+  // ③ 获取 key 对应的 Set
   let dep = depsMap.get( key )
   if ( !dep ) {
     depsMap.set( key, (dep = new Set()) )
@@ -297,7 +308,7 @@ effect(() => {
 ```  
 
 2. ② 和 ③ 会从 `targetMap` 取出当前 `key` 的 `Set` 集合（ 如果是第一次会初始化 ），然后将当前的 `effect` 放进集合中（ ④ ）
-3. ⑤ 的操作，实际上就是从 `targetMap` 中，取出依赖的属性 `Set` 集合，在 `push` 到 `effect` 中，例如  
+3. ⑤ 的操作，实际上就是从 `targetMap` 中，取出追踪属性的 `Set` 集合，在 `push` 到 `effect` 中，例如  
 
 ```typescript
 const observal = reactive({ age: 24, name: 'IconMan', common: 'type' });
@@ -308,7 +319,7 @@ const ageEffect = effect(() => {
 });
 ```  
 
-`ageEffect.deps` 保存了依赖的属性（ `age` 和 `common` ）的 `Set` 集合，这一步的目的在于 [cleanup](#cleanup) 中  
+`ageEffect.deps` 保存了需要追踪的属性（ `age` 和 `common` ）的 `Set` 集合，这一步的目的在于 [cleanup](#cleanup) 中  
 
 ```typescript
 ageEffect.deps = [ Set( ageEffect ), Set( ageEffect ) ]
@@ -340,7 +351,7 @@ cleanup( ageEffect );
 结果如下  
 
 ```typescript
-ageEffect.deps = [ Set(), Set() ]
+ageEffect.deps = []
 ```  
 
 在 [createReactiveEffect](#createReactiveEffect) 创建的 `effect` 对象中，每次执行 `fn` 前都会清除一次所有的依赖，这是为什么？先看这个示例  
@@ -362,6 +373,251 @@ observal.run = false;
 
 现在 `dummy` 就是 `0` 了，并且现在只会追踪 `run` 属性，因为 `age` 并没有被访问到  
 
-所以，每次执行回调前都要清除所有的依赖，要保证依赖是最新的  
+所以，每次执行回调前都要清除所有的依赖，要保证追踪的依赖是最新的，不能有之前遗留无效的追踪  
 
-## trigger
+## trigger  
+
+`trigger` 用来触发指定对象上指定属性追踪的依赖，一般用在 `set` 时，共有六个参数  
+1. 原始对象
+2. 触发的类型，是一个 `TriggerOpTypes` 枚举
+3. 触发的属性名
+4. `set` 的新值
+5. `set` 的旧值
+6.   
+
+```typescript
+// 触发类型为以下四种之一
+const enum TriggerOpTypes {
+  SET = 'set',        // 更新
+  ADD = 'add',        // 增加
+  DELETE = 'delete',  // 删除
+  CLEAR = 'clear'     // Map 和 Set 的 clear
+}
+```   
+
+通过搜索这几个枚举，可以发现他们被用在这些地方  
+1. `TriggerOpTypes.SET`: 
+    * `reactive`、`shallowReactive` 生成的响应对象在更新时  
+    * `Map` 的 `set` 方法（ 更新值而不是新增值 ）
+    * `ref` 对象设置值  
+2. `TriggerOpTypes.ADD`:  
+    * `reactive`、`shallowReactive` 生成的响应对象在新增时  
+    * `Map` 的 `set` 方法（ 新增值而不是更新值 ）
+    * `Set` 的 `add` 方法   
+3. `TriggerOpTypes.DELETE`:  
+    * `deelte obj[prop]` 操作  
+    * `Map` 和 `Set` 的 `delete` 操作  
+4. `TriggerOpTypes.CLEAR`:  
+    * `Map` 和 `Set` 的 `clear` 操作  
+
+```typescript
+function trigger(
+  target: object,
+  type: TriggerOpTypes,
+  key?: unknown,
+  newValue?: unknown,
+  oldValue?: unknown,
+  oldTarget?: Map<unknown, unknown> | Set<unknown>
+) {
+  const depsMap = targetMap.get( target )
+
+  // ①
+  if ( !depsMap ) {
+    // never been tracked
+    return
+  }
+
+  // 声明计算属性和普通情况的两种 effect 的集合
+  const effects = new Set<ReactiveEffect>()
+  const computedRunners = new Set<ReactiveEffect>()
+
+  const add = ( effectsToAdd: Set<ReactiveEffect> | undefined ) => {
+    if ( effectsToAdd ) {
+      effectsToAdd.forEach(effect => {
+        // TODO 这里暂时不懂
+        if ( effect !== activeEffect || !shouldTrack ) {
+          // 如果是计算属性，则放入 computedRunners；否则放入 effects
+          if ( effect.options.computed ) {
+            computedRunners.add( effect )
+          } else {
+            effects.add( effect )
+          }
+        } else {
+          // the effect mutated its own dependency during its execution.
+          // this can be caused by operations like foo.value++
+          // do not trigger or we end in an infinite loop
+        }
+      })
+    }
+  }
+
+  // 处理不同的操作
+  if ( type === TriggerOpTypes.CLEAR ) {
+    // ① 处理 Map 和 Set 的 clear 操作，需要触发所有的追踪，所以要把所有的追踪分类，以供后续调用
+    depsMap.forEach( add )
+  } else if ( key === 'length' && isArray( target ) ) {
+    // ② 处理直接修改属性的 length 属性，会执行 length 的追踪，以及修改长度后受影响的元素
+    depsMap.forEach(( dep, key ) => {
+      if ( key === 'length' || key >= (newValue as number) ) {
+        add( dep )
+      }
+    })
+  } else {
+    // ③ 新增、更新、删除操作
+
+    // ④ 收集依赖
+    if ( key !== void 0 ) {
+      add( depsMap.get( key ) )
+    }
+
+    // also run for iteration key on ADD | DELETE | Map.SET
+    // ⑤ 新增、删除的开关
+    const isAddOrDelete =
+      type === TriggerOpTypes.ADD ||
+      (type === TriggerOpTypes.DELETE && !isArray(target))
+
+    // ⑥
+    // 处理新增或者删除
+    //  对于非数组的情况，会取 ITERATE_KEY
+    //    追踪了迭代属性，例如 JSON.stringify，此时因为添加或者删除了属性，所以需要执行追踪迭代器的 effect
+    //      effect.spec.ts -> 36
+    //  对于数组的情况，会取 length
+    //    默认情况下，使用 数组[下标] 的方式增加元素，是不会触发 length 的 setter 的，所以这里增加了兼容处理，增加元素时都会触发 length 的追踪
+    if (
+      isAddOrDelete ||
+      (type === TriggerOpTypes.SET && target instanceof Map)
+    ) {
+      add( depsMap.get( isArray( target ) ? 'length' : ITERATE_KEY ) )
+    }
+    
+    // ⑦
+    if (isAddOrDelete && target instanceof Map) {
+      add( depsMap.get( MAP_KEY_ITERATE_KEY ) )
+    }
+  }
+
+  // 执行 effect
+  const run = ( effect: ReactiveEffect ) => {
+    if (__DEV__ && effect.options.onTrigger) {
+      effect.options.onTrigger({
+        effect,
+        target,
+        key,
+        type,
+        newValue,
+        oldValue,
+        oldTarget
+      })
+    }
+    // 如果 effect 存在 scheduler，就调用 scheduler 否则调用本身的 effect
+    if ( effect.options.scheduler ) {
+      effect.options.scheduler( effect )
+    } else {
+      effect()
+    }
+  }
+
+  // Important: computed effects must be run first so that computed getters
+  // can be invalidated before any normal effects that depend on them are run.
+  // ⑧
+  computedRunners.forEach(run)
+  effects.forEach(run)
+}
+```  
+
+`trigger` 函数主要的逻辑都在中间的 `if` 判断中，这一步的目的就是在于处理不同数据、不同操作情况下，到底哪些依赖是要被触发的，在最后的 ⑧ 处，会通过 `run` 函数触发需要出发的依赖  
+`add` 函数会按照是否是计算 `effect` 来收集需要触发的 `effect`  
+
+1. 先看 ② 处，处理的是直接修改数组的 `length` 属性，这种情况，有两种追踪的依赖需要被触发  
+
+    * 追踪了 `length` 属性
+    * 一个含有四个元素的数组，修改 `length` 为 `2`，那么后两个元素会被删除，所以索引大于 `2` 的追踪也会触发  
+
+```typescript
+let length;
+let first;
+let third;
+const observal = reactive([ 7, 5, 9, 0 ]);
+
+const arrFn = () => {
+  length = observal.length; // 追踪 length
+  third = observal[2];      // 追踪第三个元素
+};
+const firstFn = () => {
+  first = observal[0];      // 追踪第一个元素
+}
+
+const arrEffect = ( arrFn );
+const firstEffect = effect( firstFn );
+
+// length -> 4
+// first  -> 7
+// third  -> 9
+
+observal.length = 2;
+
+// length -> 2
+// first  -> 7
+// third  -> undefined
+```  
+
+修改后，`length` 和 `third` 都发生了变化，而 `first` 不变，所以，`firstFn` 只会执行一次  
+
+2. 对于修改已存在属性来说，会在 ④ 处收集需要触发的依赖，然后再 ⑧ 处执行  
+
+```typescript
+const observal = reactive({ age: 24 });
+effect(() => {
+  dummy = observal.age;
+});
+
+// dummy -> 24
+observal.age = 25;
+// dummy -> 25
+```  
+
+3. 对于更新、新增、删除属性操作来说，都会进入 ③ 处理，且在 ④ 会有两种情况  
+
+    * 追踪过该属性，会收集触发的依赖
+    * 没有追踪过该属性，不会收集触发的依赖  
+
+```typescript
+let dummy;
+const observal = reactive({ run: false });
+const runEffect = effect(() => {
+  dummy = observal.run;
+});
+
+// dummy -> false
+observal.run = true;
+observal.age = 24;
+// dummy -> true
+```  
+
+触发 `observal.age = 24` 时，在 `trigger` 中不会收集到任何依赖，所以什么也不会做  
+
+4. 看 ⑤ 处的变量，这个变量意味着新增、或者删除的开关，主要用在 ⑥ 和 ⑦ 判断  
+    * 如果为 `true`，代表元素的数量发生了变化，所以与遍历或者长度的操作，都需要触发  
+    * 对于数组的 `delete` 操作，并不属于删除，因为它只将对应的元素设置为 `undefined` 并不会改变数组的长度，所以过滤了这种情况 `type === TriggerOpTypes.DELETE && !isArray(target)`  
+    * 对于 `Map` 实例来说，如果追踪了遍历操作，那么就算是更新值，也是需要触发遍历依赖的  
+
+      ```typescript
+      let dummy: number = 0;
+      const observal = reactive<Map<string, number>>( new Map() );
+      effect(() => {
+        dummy = 0;
+        for ( const [ , num ] of observal ) {
+          dummy += num;
+        }
+      });
+
+      // dummy -> 0
+      observal.set( 'num1', 1 );
+      // dummy -> 1
+      observal.set( 'num1', 3 );
+      // dummy -> 3
+      ```  
+
+    * 但是对于普通对象，似乎并没有专门处理更新时，也要收集遍历的依赖  
+      这是因为，对于遍历操作来说，始终会和获取每个属性值在同一个 `effect` 中，所以只要修改了其中一个值，都会重新触发  
+      如果仅仅是获取属性名，那和值是没有关系的，也就不必再触发依赖

@@ -16,6 +16,8 @@
     - [track](#track)
     - [cleanup](#cleanup)
     - [trigger](#trigger)
+    - [stop](#stop)
+    - [schedule](#schedule)
 
 之前说过的 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 和 [ref](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/ref) 都是作响应式的，那具体响应式是如何做到的，就在于 `get` 中的 `track` 以及 `set` 中的 `trigger`  
 
@@ -620,4 +622,80 @@ observal.age = 24;
 
     * 但是对于普通对象，似乎并没有专门处理更新时，也要收集遍历的依赖  
       这是因为，对于遍历操作来说，始终会和获取每个属性值在同一个 `effect` 中，所以只要修改了其中一个值，都会重新触发  
-      如果仅仅是获取属性名，那和值是没有关系的，也就不必再触发依赖
+      如果仅仅是获取属性名，那和值是没有关系的，也就不必再触发依赖  
+
+5. 在 ⑧ 处最后可以看到，是先执行 `computed` 的依赖，再执行普通的依赖  
+
+## stop  
+
+这个方法用来停止一个 `effect` 对象，是否停止就是用 `active` 属性来标识的，停止时会清除其所有的依赖  
+
+```typescript
+function stop( effect: ReactiveEffect ) {
+  if ( effect.active ) {
+    // 清除依赖
+    cleanup( effect )
+    // 如果存在 onStop 钩子就调用
+    if ( effect.options.onStop ) {
+      effect.options.onStop()
+    }
+    // 修改标识为 false
+    effect.active = false
+  }
+}
+```
+
+停止的 `effect` 不会触发任何的依赖，因为已经被清除掉了，但是可以手动执行 `effect`，此时是通过 [createReactiveEffect](#createReactiveEffect) 中的 ① 处执行的回调，所以 `activeEffect` 和 `shouldTrack` 都不是有效值，所以在 `track` 中就不会进行追踪  
+
+```typescript
+let dummy;
+const observal = reactive({ age: 24 });
+const ageEffect = effect(() => {
+  dummy = observal.age;
+});
+
+// dummy -> 24
+
+stop( ageEffect );
+
+observal.age = 25;
+// dummy -> 24
+
+ageEffect();
+// dummy -> 25
+
+observal.age = 26;
+// dummy -> 25
+```  
+
+## schedule  
+
+`effect` 存在 `schedule` 的话，那么 `effect` 的回调只有第一次或者手动调用的时候才会执行，每次 `set` 后执行的是 `schedule`（ 在 [trigger](#trigger) 会判断 ），并且如果停止带有 `schedule` 的 `effect`，那么它的回调永远也不会被调用了（ 在 [createReactiveEffect](#createReactiveEffect) ① 会判断 ） 
+
+```typescript
+let dummy
+const effects = [];
+const observal = reactive({ age: 24 });
+const ageEffect = effect(() => {
+  dummy = observal.age;
+}, {
+  scheduler: e => effects.push( e )
+});
+
+// dummy -> 24
+
+observal.age = 25;
+// dummy -> 24
+// effects[0] -> ageEffect
+
+ageEffect();
+// dummy -> 25
+
+stop( ageEffect );
+
+observal.age = 26;
+// dummy -> 25
+
+ageEffect();
+// dummy -> 25
+```

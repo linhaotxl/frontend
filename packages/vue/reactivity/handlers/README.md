@@ -15,6 +15,17 @@
     - [deleteProperty](#deleteproperty)
     - [代理对象总和](#代理对象总和)
 - [集合型代理](#集合型代理)
+    - [mutableInstrumentations](#mutableinstrumentations)
+        - [set](#set-1)
+        - [get](#get-1)
+        - [add](#add)
+        - [deleteEntry](#deleteentry)
+        - [clear](#clear)
+        - [iterator](#iterator)
+        - [createIterableMethod](#createiterablemethod)
+        - [createForEach](#createforeach)
+    - [readonlyInstrumentations](#readonlyinstrumentations)
+        - [createReadonlyMethod](#createreadonlymethod)
 - [TODO](#todo)
 
 经过上一节 [reactive](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/reactive) 的分析后，我们已经知道创建响应对象的流程了，但其中的难点就是各自的代理方式  
@@ -591,6 +602,478 @@ const shallowReadonlyHandlers: ProxyHandler<object> = {
 ```
 
 # 集合型代理  
+
+集合型指的是 `Map`、`Set`、`WeakMap` 以及 `WeakSet` 这几种，因为这几种都是原生提供的 API，增删改查都是调用它们的实例方法，所以先对获取实例方法这一层做了一个拦截  
+
+集合型代理主要是 `mutableCollectionHandlers` 和 `readonlyCollectionHandlers` 这两个，先来看它们的定义  
+
+```typescript
+// 非只读代理
+const mutableCollectionHandlers: ProxyHandler<CollectionTypes> = {
+  get: createInstrumentationGetter( mutableInstrumentations )
+}
+
+// 只读代理
+const readonlyCollectionHandlers: ProxyHandler<CollectionTypes> = {
+  get: createInstrumentationGetter( readonlyInstrumentations )
+}
+```  
+
+`createInstrumentationGetter` 函数用来创建 `get` 的代理，如果访问的属性存在于参数 `instrumentations` 中，就会获取到对应的内容，如果不存在，则从自身获取  
+
+```typescript
+function createInstrumentationGetter( instrumentations: Record<string, Function> ) {
+  return (
+    target: CollectionTypes,
+    key: string | symbol,
+    receiver: CollectionTypes
+  ) =>
+    Reflect.get(
+      hasOwn(instrumentations, key) && key in target
+        ? instrumentations
+        : target,
+      key,
+      receiver
+    )
+}
+```  
+
+可以看出，参数中必须要包含 `Set` 和 `Map` 所有的操作方法，分类如下  
+`Map`: `get`、`set`
+`Set`: `add`
+公共: `size`、`has`、`delete`、`clear`、`forEach`、`keys`、`values`、`entries` 和 `Symbol.iterator`
+
+接下来先来看 `mutableInstrumentations` 的内容  
+
+## mutableInstrumentations  
+
+```typescript
+const mutableInstrumentations: Record<string, Function> = {
+  get(this: MapTypes, key: unknown) {
+    return get(this, key, toReactive)
+  },
+  get size() {
+    return size((this as unknown) as IterableCollections)
+  },
+  has,
+  add,
+  set,
+  delete: deleteEntry,
+  clear,
+  forEach: createForEach(false)
+}
+
+const iteratorMethods = ['keys', 'values', 'entries', Symbol.iterator]
+iteratorMethods.forEach(method => {
+  mutableInstrumentations[method as string] = createIterableMethod(
+    method,
+    false
+  )
+})
+```  
+
+### set  
+
+`set` 用来对 `Map` 实例设置值，所以它有两个参数，`key` 和 `value`，并且方法中的 `this` 指向的是调用者，即响应对象  
+
+```typescript
+function set( this: MapTypes, key: unknown, value: unknown ) {
+  // 将值转换为原始值，如果 set 的是一个响应式对象，其实设置的还是它的原始对象
+  value = toRaw( value )
+
+  // 获取原始对象 Map
+  const target = toRaw( this )
+  // 获取原生方法
+  const { has, get, set } = getProto( target )
+
+  // 检查是新增还是更新操作，用于之后 trigger 的类型
+  let hadKey = has.call( target, key )
+
+  if ( !hadKey ) {
+    // 暂时认为是新增操作
+    // 此时有两种情况
+    //  1. 新增的 key 的确是一个原来没有的 key
+    //  2. 新增的 key 是一个响应对象，需要转换为原始对象再做一次检查
+    // 所以针对第二种情况，需要将 key 做转换，再查询一次
+    key = toRaw( key )
+    hadKey = has.call( target, key )
+  }
+
+  const oldValue = get.call( target, key )
+  const result = set.call( target, key, value )
+
+  // 触发不同类型的 trigger
+  if ( !hadKey ) {
+    trigger( target, TriggerOpTypes.ADD, key, value )
+  } else if ( hasChanged( value, oldValue ) ) {
+    trigger( target, TriggerOpTypes.SET, key, value, oldValue )
+  }
+
+  return result
+}
+```  
+
+1. 如果 `key` 为响应对象，那实际设置 `key` 是它的原始对象  
+
+### get  
+
+`get` 用来对 `Map` 实例获取值，它有三个参数  
+
+1. 调用者响应对象  
+2. 获取的 `key`
+3. 当获取结果为对象时的包装函数  
+
+```typescript
+function get(
+  target: MapTypes,
+  key: unknown,
+  wrap: typeof toReactive | typeof toReadonly
+) {
+  // 此时 target 是响应对象，所以需要获取原始对象
+  target = toRaw( target )
+
+  const rawKey = toRaw( key )
+  if ( key !== rawKey ) {
+    // ①
+    // 如果 key 本身是响应对象，那么此时不仅要追踪原始 key 还要追踪响应 key
+    track( target, TrackOpTypes.GET, key )
+  }
+  track( target, TrackOpTypes.GET, rawKey )
+
+  const { has, get } = getProto( target )
+
+  // 如果 key 或者 rawKey 存在，就取出，并且如果是对象转换为响应数据
+  if ( has.call( target, key ) ) {
+    return wrap( get.call(target, key) )
+  } else if ( has.call( target, rawKey ) ) {
+    return wrap( get.call( target, rawKey ) )
+  }
+}
+```  
+
+1. 看 ① 处，如果获取的 `key` 是一个响应对象，那么会同时追踪响应对象和原始对象  
+
+    ```typescript
+    const raw = new Map();
+    const key = reactive({});
+    raw.set( key, 1 )
+    const map = reactive( raw )
+
+    let dummy
+    effect(() => {
+      // 获取的 key 是一个响应对象，所以会同时追踪响应和原始
+      dummy = map.get( key )
+    })
+    // dummy -> 1
+
+    map.set(key, 2)
+    // dummy -> 2
+    ```  
+
+### add   
+
+`add` 用来对 `Set` 实例添加元素，所以它只接受一个参数，并且 `Set` 是不会重复的集合，所以只有第一次添加才会触发追踪的依赖  
+
+```typescript
+function add( this: SetTypes, value: unknown ) {
+  // 获取添加元素的原始对象
+  value = toRaw( value )
+  // 获取 Set 实例本身
+  const target = toRaw( this )
+  const proto = getProto( target )
+
+  const hadKey = proto.has.call(target, value)
+  const result = proto.add.call(target, value)
+
+  if ( !hadKey ) {
+    trigger( target, TriggerOpTypes.ADD, value, value )
+  }
+
+  return result
+}
+```  
+
+### deleteEntry  
+
+```typescript
+function deleteEntry( this: CollectionTypes, key: unknown ) {
+  // 获取原始实例
+  const target = toRaw( this )
+  const { has, get, delete: del } = getProto( target )
+  // 检测删除的元素是否存在
+  let hadKey = has.call( target, key )
+  if ( !hadKey ) {
+    // 暂时认为是不存在的
+    // 此时有两种情况
+    //  1. 删除的 key 的确是一个没有的 key
+    //  2. 删除的 key 是一个响应对象，需要转换为原始对象再做一次检查
+    key = toRaw( key )
+    hadKey = has.call( target, key )
+  }
+
+  const oldValue = get ? get.call(target, key) : undefined
+
+  // 调用原生方法删除
+  const result = del.call(target, key)
+  // 如果删除的元素本身存在，才会触发追踪的依赖
+  if ( hadKey ) {
+    trigger(target, TriggerOpTypes.DELETE, key, undefined, oldValue)
+  }
+
+  return result
+}
+```  
+
+### clear  
+
+```typescript
+function clear( this: IterableCollections ) {
+  const target = toRaw( this )
+  const hadItems = target.size !== 0
+
+  const oldTarget = __DEV__
+    ? target instanceof Map
+      ? new Map(target)
+      : new Set(target)
+    : undefined
+
+  // 调用原生方法清除所有元素
+  const result = getProto( target ).clear.call( target )
+
+  // 当实例在 clear 前有元素时才会触发追踪的依赖
+  if ( hadItems ) {
+    trigger( target, TriggerOpTypes.CLEAR, undefined, undefined, oldTarget )
+  }
+
+  return result
+}
+```  
+
+### iterator  
+
+`Set` 和 `Map` 的 `keys`、`values`、`entries` 和 `Symbol.iterator` 方法返回的都是迭代器对象，继续通过 `next` 方法才能获取到最终的值，不同的方法取出的值可能不一样，先看下面这个示例    
+
+```typescript
+const set = new Set([ 'IconMan', 'Nicholas' ]);
+const map = new Map([
+  [ 'IconMan', 24 ],
+  [ 'Nicholas', 25 ]
+]);
+
+set.keys().next().value;  // IconMan
+map.keys().next().value;  // IconMan
+
+set.values().next().value;  // IconMan
+map.values().next().value;  // 24
+
+set.entries().next().value; // [ IconMan, IconMan ]
+map.entries().next().value; // [ IconMan, 24 ]
+
+set[Symbol.iterator]().next().value;  // IconMan
+map[Symbol.iterator]().next().value;  // [ IconMan, 24 ]
+```  
+
+可以看出，只有调用 `entries` 和 `Map` 的 `Symbol.iterator` 这三种情况，获取到的值是一个数组，第一个元素是键名，第二个元素是键值（ 对于 `Set` 来说这两个一样 ），我们称这样获取到的值是成对存在的  
+
+### createIterableMethod  
+这个方法接受两个参数  
+1. 生成的迭代器函数用在哪个方法，例如 `keys`
+2. 是否是只读  
+
+```typescript
+function createIterableMethod(method: string | symbol, isReadonly: boolean) {
+  return function iterableMethod(this: IterableCollections, ...args: unknown[]) {
+    const target = toRaw( this )
+    const isMap = target instanceof Map
+    // ①
+    // 检测值是否是成对存在，只有调用 entries 或者是遍历 Map 对象
+    const isPair = method === 'entries' || (method === Symbol.iterator && isMap)
+    // 检测是否是 Map 的 keys 方法
+    const isKeyOnly = method === 'keys' && isMap
+    // 获取迭代器对象
+    const innerIterator = getProto(target)[method].apply(target, args)
+    // 根据是否只读获取包装函数
+    const wrap = isReadonly ? toReadonly : toReactive
+    // ②
+    // 非只读需要追踪遍历属性
+    // 如果访问的是 keys 方法，那么追踪的是 MAP_KEY_ITERATE_KEY 代表只有 key 发生变化
+    !isReadonly &&
+      track(
+        target,
+        TrackOpTypes.ITERATE,
+        isKeyOnly ? MAP_KEY_ITERATE_KEY : ITERATE_KEY
+      )
+
+    // ③
+    // 模拟返回迭代器对象
+    // return a wrapped iterator which returns observed versions of the
+    // values emitted from the real iterator
+    return {
+      // iterator protocol
+      next() {
+        // 调用真实的迭代器对象，获取对应值
+        const { value, done } = innerIterator.next()
+        return done
+          ? { value, done }
+          : {
+              // 对每个值都进行一次包装处理，如果是对象则要转换为响应对象
+              value: isPair ? [ wrap(value[0]), wrap(value[1]) ] : wrap( value ),
+              done
+            }
+      },
+      // iterator 接口，返回 return 的这个对象，以后后续调用 next 方法
+      [ Symbol.iterator ]() {
+        return this
+      }
+    }
+  }
+}
+```  
+
+
+1. 以 `entries` 举例来说明这段代码  
+
+    ```typescript
+    let dummy;
+    const original = new Map([
+      [ 'IconMan', 24 ],
+      [ 'Nicholas', 25 ]
+    ]);
+    const observal = reactive( original );
+
+    effect(() => {
+      for ( const [ name, age ] of observal.entries() ) {
+        dummy += age;
+      }
+    });
+
+    // dummy -> 49
+    ```  
+
+* 在 `for...of` 中，调用 `observal.entries()` 后，会调用 `Symbol.iterator` 获取遍历器对象，这里获取的只是模拟的一个遍历器对象  
+* 再调用模拟的 `next` 方法，在 `next` 方法中，调用真实遍历器的 `next` 方法获取 `value` 和 `done`，并对 `value` 进一步处理，最终返回对象，保持和实际遍历器一致  
+
+2. 如果 `Set` 和 `Map` 中含有对象，那么我们在遍历时得到的是对应的响应对象，而不是本身的原始对象  
+
+3. 为什么会对 `map.keys()` 单独追踪 `MAP_KEY_ITERATE_KEY` 而不是追踪遍历的 `ITERATE_KEY`？  
+在 [trigger](https://github.com/linhaotxl/frontend/tree/master/packages/vue/reactivity/effect#trigger) 中，有这样一个判断，表示我们通过 `map.set` 更新（ 不是增加 ）一个值的时候，也是需要触发遍历的依赖  
+
+```typescript
+if (
+  isAddOrDelete ||
+  (type === TriggerOpTypes.SET && target instanceof Map)
+) {
+  add( depsMap.get( isArray( target ) ? 'length' : ITERATE_KEY ) )
+}
+```  
+
+但是通过 `map.keys()` 得到的结果和键值是无关的，只和键名相关，看下面这个示例  
+
+```typescript
+let dummy = 0;
+let names = [];
+const original = new Map([
+  [ 24, 'IconMan' ],
+  [ 25, 'Nicholas' ]
+]);
+const observal = reactive( original );
+effect(() => {
+  dummy = 0;
+  // 这里只会追踪遍历 key 的依赖，并且这个依赖在 trigger 中只有新增或者删除的时候才会被触发
+  for ( const age of observal.keys() ) {
+    dummy += age;
+  }
+});
+
+effect(() => {
+  names = [];
+  // 这里会追踪遍历的依赖
+  for ( const name of observal.values() ) {
+    names.push( name );
+  }
+});
+
+// dummy -> 49
+// names -> [ IconMan, Nicholas ]
+
+observal.set( 24, 'SpiderMan' );
+
+// dummy -> 49
+// names -> [ SpiderMan, Nicholas ]
+```  
+
+### createForEach  
+
+`forEach` 用来遍历每个数据，其中有几点要注意  
+1. 回调的前两个参数分别是键值和键名，如果它们为对象的话，那么得到的就是对应的响应对象  
+2. 回调的第三个参数和 `this`，都指向调用者，并且 `this` 没办法修改
+
+```typescript
+function createForEach(isReadonly: boolean) {
+  return function forEach(
+    this: IterableCollections,
+    callback: Function,
+    thisArg?: unknown
+  ) {
+    // 获取调用者响应对象
+    const observed = this
+    // 获取原始对象
+    const target = toRaw( observed )
+    const wrap = isReadonly ? toReadonly : toReactive
+    // 非只读情况下追踪遍历
+    !isReadonly && track( target, TrackOpTypes.ITERATE, ITERATE_KEY )
+    
+    function wrappedCallback( value: unknown, key: unknown ) {
+      // 这里的 this 其实是有外部决定的，不过这里没有用到
+      // 将 value 和 key 都进行封装
+      // this 和第三个参数都指向 observed
+      return callback.call( observed, wrap( value ), wrap( key ), observed )
+    }
+
+    return getProto( target ).forEach.call( target, wrappedCallback, thisArg )
+  }
+}
+```  
+
+## readonlyInstrumentations  
+
+`readonlyInstrumentations` 简单很多，和 `mutableInstrumentations` 相似的地方前面已经说过了，唯一不同的就是可以修改的几个方法  
+
+```typescript
+const readonlyInstrumentations: Record<string, Function> = {
+  get(this: MapTypes, key: unknown) {
+    return get(this, key, toReadonly)
+  },
+  get size() {
+    return size((this as unknown) as IterableCollections)
+  },
+  has,
+  add: createReadonlyMethod(TriggerOpTypes.ADD),
+  set: createReadonlyMethod(TriggerOpTypes.SET),
+  delete: createReadonlyMethod(TriggerOpTypes.DELETE),
+  clear: createReadonlyMethod(TriggerOpTypes.CLEAR),
+  forEach: createForEach(true)
+}
+```  
+
+修改的几个方法通过 `createReadonlyMethod` 创建，这个函数其实很简单，什么也不会做  
+
+### createReadonlyMethod  
+
+```typescript
+function createReadonlyMethod( type: TriggerOpTypes ): Function {
+  return function(this: CollectionTypes, ...args: unknown[]) {
+    if (__DEV__) {
+      const key = args[0] ? `on key "${args[0]}" ` : ``
+      console.warn(
+        `${capitalize(type)} operation ${key}failed: target is readonly.`,
+        toRaw(this)
+      )
+    }
+    return type === TriggerOpTypes.DELETE ? false : this
+  }
+}
+```
 
 # TODO  
 1. `arrayInstrumentations` 中的 `track` 追踪每个元素

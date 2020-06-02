@@ -698,4 +698,7 @@ observal.age = 26;
 
 ageEffect();
 // dummy -> 25
-```
+```  
+
+# TODO  
+1. `trigger` 中 `else` 的 `if` 判断，`vue/examples/__tests__/markdown.spec.ts` 有测试用例

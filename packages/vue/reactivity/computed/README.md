@@ -1,5 +1,8 @@
 **为了更加清楚理解源码的意义，代码的顺序做了调整**  
 
+- [computed](#computed)
+    - [computed 实现](#computed-实现)
+
 # computed  
 `computed` 函数用来生成一个计算属性，通过返回对象的 `value` 属性来获取计算后的值，基于 [effect]() 实现，但不同的是  
 1. `computed` 中的回调不会立即执行  

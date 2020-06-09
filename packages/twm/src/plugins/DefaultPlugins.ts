@@ -1,8 +1,7 @@
 import { GlobbyPathPlugin } from './GlobbyPathPlugin';
 // import NodeModulesPlugin from './NodeModulesPlugin';
 import { TranslatePlugin } from './TranslatePlugin';
-// import GenerateDist from './GenerateDist';
-import { CopyFilePlugin } from './CopyFilePlugin';
+import { GenerateDistPlugin } from './GenerateDistPlugin';
 import { TranslateTSPlugin } from './TranslateTSPlugin';
 import { ClearOutputFilePlugin } from './ClearOutputFilePlugin';
 
@@ -11,7 +10,6 @@ export const DefaultPlugins = [
     TranslateTSPlugin,
     TranslatePlugin,
     // NodeModulesPlugin,
-    // GenerateDist,
     ClearOutputFilePlugin,
-    CopyFilePlugin
+    GenerateDistPlugin
 ];

@@ -27,10 +27,10 @@ const pageTS = EPath[ langTS ];
 function main () {
     const { src, output } = argv;
     new Twm({
-        inputPath: inputPathTS,
-        outputPath: outputPathTS,
-        lang: langTS,
-        buildPath: pageTS
+        inputPath: inputPathJS,
+        outputPath: outputPathJS,
+        lang: langJS,
+        buildPath: pageJS
     }).start();
 }
 

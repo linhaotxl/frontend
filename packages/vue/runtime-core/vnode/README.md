@@ -7,7 +7,14 @@
     - [extend](#extend)
     - [mergeProps](#mergeprops)
 - [vNode](#vnode)
+    - [openBlock](#openblock)
+    - [patchFlag](#patchflag)
+    - [shapeFlag](#shapeflag)
     - [_createVNode](#_createvnode)
+    - [createBlock](#createblock)
+    - [shouldTrack](#shouldtrack)
+    - [示例](#示例)
+        - [示例一](#示例一)
 
 # 工具方法  
 
@@ -237,16 +244,14 @@ export function render(_ctx, _cache) {
 先来解释下上面出现的 `_openBlock` 和 `_createBlock` 中的 `block` 的意义  
 
 `block` 可以理解为一个区域，由数组实现，保存的是会变化的节点，也可以理解为需要追踪的节点，例如 `<div>{{ name }}</div>` 这样的标签，因为 `name` 是随时会发生变化，而不是一个静态节点 `<div>name</div>`  
-保存下来的目的就是为了在之后 `diff` 的时候，只需要对这些追踪的节点进行 `diff`，从而避免不必要的操作  
-
-每个 `block` 都会有一个根节点，会将当前的 `block` 挂载到根节点上面
+保存下来的目的就是为了在之后 `diff` 的时候，只需要对这些追踪的节点进行 `diff`，从而优化性能  
 
 上面代码中的三个方法的作用大致使用流程如下  
 1. 先开启一个 `block` 区域  
-2. 将需要追踪的节点保存在当前的 `block` 中  
+2. 创建 `vNode` 节点，并将需要追踪的节点保存在当前的 `block` 中  
 3. 创建根节点，并将当前 `block` 内所有需要追踪的节点挂载到根节点上   
 
-所以，一个 `block` 的生命周期就是从 `open` 开始，直至创建完根节点后  
+所以，一个 `block` 的生命周期就是从 `openBlock` 开始，直至创建完根节点后，也就是 `createBlock` 后  
 
 ## openBlock  
 
@@ -263,7 +268,7 @@ function openBlock( disableTracking = false ) {
 2. `currentBlock` 是当前开启的 `block`，在 `createNode` 中需要将追踪的节点保存在当前 `block` 中  
    
 ## patchFlag  
-上面说过，`<div>{{ name }}</div>` 这种是发生变化的节点，但是变化的类型有很多，这只是其中一种，先来看所有的变化类型  
+上面说过，`<div>{{ name }}</div>` 这种是发生变化的节点，需要追踪，但是变化的类型有很多，这只是其中一种，下面是所有的变化类型  
 
 ```typescript
 const enum PatchFlags {
@@ -458,9 +463,22 @@ function createBlock(
 ## shouldTrack  
 这是一个全局变量，它的值是数值，每次创建一个根节点，就会 - 1，创建完成后再 + 1  
 
-因为在 `createNode` ④ 中，会判断 `shouldTrack` 是否大于 `0`
-  * 如果大于 `0` 则说明当前创建的不是根节点，则可能会将节点存入 `block` 中
-  * 如果不是，则说明创建的是根节点，不想要存入 `block` 中  
+因为在 [createNode](#createNode) ④ 中，会判断 `shouldTrack` 是否大于 `0`
+  * 如果大于 `0` 则说明当前创建的不是根节点，则根据其他逻辑判断是否将节点存入 `block` 中
+  * 如果不是，则说明创建的是根节点，不需要存入 `block` 中  
 
 **所以，这个变量可以用来区分当前创建的节点是否是根节点**   
 
+## 示例  
+
+### 示例一  
+
+```typescript
+const node = (_openBlock(), _createBlock("div", { class: "container" }, [
+  _createVNode("span", { class: "text" }, "This is span element.", PatchFlags.TEXT)
+]))
+```  
+
+1. 开启一个 `block`，`blockStack` 现在就是 `[ [] ]`  
+2. 创建 `span` 节点，发现 `shouldTrack` 为 `1` 并且 `patchFlag` 不等于 `0`，所以将这个节点存入当前 `block` 中  
+3. 创建根节点 `div`，此时 `shouldTrack` 为 `0`，所以直接跳过 `createNode` 的 ④，然后将当前 `block` 挂载到根节点上，最后恢复 `blockStack` 和 `currentBlock`

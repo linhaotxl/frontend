@@ -296,9 +296,10 @@ const enum PatchFlags {
 
 ## shapeFlag  
 
-## _createVNode  
+## createBlock  
 
-这个方法用来创建一个具体的 `vNode` 节点，接受五个参数  
+这个方法创建一个根节点，根节点和普通节点一样，都是 `vNode` 对象，但根节点上会保存会变化的子节点  
+可以看到，内部会调用 [createVNode](#createVNode) 来创建根节点对象，并且将所有的参数全部传给 `createVNode`，所以这两个函数接受的参数是一样的 
 
 1. 节点类型  
     1. 对于原生 `DOM` 来说，就是标签名称，例如 `'div'`  
@@ -306,7 +307,45 @@ const enum PatchFlags {
 2. 节点属性 `props`  
 3. 子节点 
 4. 需要变化的类型，就是上面 `patchFlag` 几种类型，若存在多个则由 按位或 合成
-5. 动态属性
+5. 动态属性  
+
+```typescript
+function createBlock(
+  type: VNodeTypes | ClassComponent,
+  props?: { [key: string]: any } | null,
+  children?: any,
+  patchFlag?: number,
+  dynamicProps?: string[]
+): VNode {
+  // ①
+  // avoid a block with patchFlag tracking itself
+  shouldTrack--
+  // 创建根节点对应的 vNode 对象
+  const vnode = createVNode(type, props, children, patchFlag, dynamicProps)
+  // ②
+  shouldTrack++
+
+  // ③
+  // 将所有的需要变化的子节点挂载到根节点的 dynamicChildren 上
+  // 根节点在每个 block 的最后才会创建，在这之前，已经会把所有需要追踪的子节点放进当前 block 中
+  vnode.dynamicChildren = currentBlock || EMPTY_ARR
+
+  // 释放 block 栈，并更新当前 block 为栈中的上一个
+  blockStack.pop()
+  currentBlock = blockStack[blockStack.length - 1] || null
+
+  // a block is always going to be patched, so track it as a child of its
+  // parent block
+  // ④
+  if (currentBlock) {
+    currentBlock.push(vnode)
+  }
+
+  return vnode
+}
+```  
+
+## createVNode  
 
 ```typescript
 function _createVNode(
@@ -316,7 +355,7 @@ function _createVNode(
   patchFlag: number = 0,
   dynamicProps: string[] | null = null
 ): VNode {
-  // 默认为注释 Comment node
+  // 默认为注释 Comment 节点
   if (!type) {
     type = Comment
   }
@@ -334,7 +373,7 @@ function _createVNode(
       props = extend({}, props)
     }
 
-    // 序列化 class 为字符串
+    // 序列化 class 为字符串，并将结果挂载到 props.class 中
     let { class: klass, style } = props
     if ( klass && !isString( klass ) ) {
       props.class = normalizeClass( klass )
@@ -348,7 +387,7 @@ function _createVNode(
         style = extend({}, style)
       }
 
-      // 序列化 style 对象
+      // 序列化 style 对象，并将结果挂载到 props.style 中
       props.style = normalizeStyle(style)
     }
   }
@@ -419,46 +458,7 @@ function _createVNode(
 
   return vnode
 }
-```    
-
-1. 先看 ④ 处，这里就是将可变化的节点放进当前 `block` 中，其中涉及到一个变量 [shouldTrack](#shouldTrack)  
-
-可以看出，如果当前创建的节点不是根节点，并且不是
-
-## createBlock  
-
-这个方法创建一个根节点，虽然根节点也是一个 `vNode` 对象，但是它和非根节点还是有一定区别的，所以它的参数和 `creareNode` 一模一样  
-
-```typescript
-function createBlock(
-  type: VNodeTypes | ClassComponent,
-  props?: { [key: string]: any } | null,
-  children?: any,
-  patchFlag?: number,
-  dynamicProps?: string[]
-): VNode {
-  // avoid a block with patchFlag tracking itself
-  shouldTrack--
-  // 创建根节点对应的 vNode 对象
-  const vnode = createVNode(type, props, children, patchFlag, dynamicProps)
-  shouldTrack++
-
-  // 将当前的 block 挂载到根节点上
-  vnode.dynamicChildren = currentBlock || EMPTY_ARR
-
-  // 释放 block 栈，并更新当前 block 为上一个
-  blockStack.pop()
-  currentBlock = blockStack[blockStack.length - 1] || null
-
-  // a block is always going to be patched, so track it as a child of its
-  // parent block
-  if (currentBlock) {
-    currentBlock.push(vnode)
-  }
-
-  return vnode
-}
-```  
+```      
 
 ## shouldTrack  
 这是一个全局变量，它的值是数值，每次创建一个根节点，就会 - 1，创建完成后再 + 1  
@@ -471,7 +471,7 @@ function createBlock(
 
 ## 示例  
 
-### 示例一  
+### 示例一 基本使用
 
 ```typescript
 const node = (_openBlock(), _createBlock("div", { class: "container" }, [
@@ -480,5 +480,9 @@ const node = (_openBlock(), _createBlock("div", { class: "container" }, [
 ```  
 
 1. 开启一个 `block`，`blockStack` 现在就是 `[ [] ]`  
-2. 创建 `span` 节点，发现 `shouldTrack` 为 `1` 并且 `patchFlag` 不等于 `0`，所以将这个节点存入当前 `block` 中  
-3. 创建根节点 `div`，此时 `shouldTrack` 为 `0`，所以直接跳过 `createNode` 的 ④，然后将当前 `block` 挂载到根节点上，最后恢复 `blockStack` 和 `currentBlock`
+2. 创建 `span` 节点，并且需要追踪，所以将这个节点存入当前 `block` 中  
+3. 创建根节点 `div`，此时 `shouldTrack` 为 `0`，所以不会追踪根节点，然后将当前 `block` 挂载到根节点上，最后恢复 `blockStack` 和 `currentBlock`  
+
+根节点的 `dynamicChildren` 保存了追踪的节点 `span`  
+
+### 示例二 

@@ -10,11 +10,13 @@
     - [openBlock](#openblock)
     - [patchFlag](#patchflag)
     - [shapeFlag](#shapeflag)
-    - [_createVNode](#_createvnode)
     - [createBlock](#createblock)
-    - [shouldTrack](#shouldtrack)
+    - [createVNode](#createvnode)
     - [示例](#示例)
-        - [示例一](#示例一)
+        - [示例一 基本使用](#示例一-基本使用)
+        - [示例二 嵌套使用 openBlock](#示例二-嵌套使用-openblock)
+        - [示例三 特殊节点也需要追踪](#示例三-特殊节点也需要追踪)
+
 
 # 工具方法  
 
@@ -345,10 +347,18 @@ function createBlock(
 }
 ```  
 
+主要流程如下  
+1. 减去 `shouldTrack`  
+2. 创建根节点 `vNode` 对象  
+3. 恢复 `shouldTrack`  
+4. 将根节点下所有需要追踪的子节点挂载到 `dynamicChildren` 属性中  
+5. `block` 出栈  
+6. 
+
 ## createVNode  
 
 ```typescript
-function _createVNode(
+function createVNode(
   type: VNodeTypes | ClassComponent,
   props: (Data & VNodeProps) | null = null,
   children: unknown = null,
@@ -460,14 +470,22 @@ function _createVNode(
 }
 ```      
 
-## shouldTrack  
+主要分为这么几个步骤  
+1. 处理 Class Component 的情况  
+2. 设置 `class` 和 `style` 两个属性  
+3. 根据 `type` 来设置 `shapeFlag`  
+4. 创建 `vNode` 对象  
+5. 设置子节点内容和 `shapeFlag`  
+6. 如果当前节点需要追踪则放入 `block` 中  
+
+<!-- ## shouldTrack  
 这是一个全局变量，它的值是数值，每次创建一个根节点，就会 - 1，创建完成后再 + 1  
 
 因为在 [createNode](#createNode) ④ 中，会判断 `shouldTrack` 是否大于 `0`
   * 如果大于 `0` 则说明当前创建的不是根节点，则根据其他逻辑判断是否将节点存入 `block` 中
   * 如果不是，则说明创建的是根节点，不需要存入 `block` 中  
 
-**所以，这个变量可以用来区分当前创建的节点是否是根节点**   
+**所以，这个变量可以用来区分当前创建的节点是否是根节点**    -->
 
 ## 示例  
 
@@ -475,14 +493,59 @@ function _createVNode(
 
 ```typescript
 const node = (_openBlock(), _createBlock("div", { class: "container" }, [
-  _createVNode("span", { class: "text" }, "This is span element.", PatchFlags.TEXT)
+  _createVNode("span", { class: "text1" }, "This is span element.", PatchFlags.TEXT),
+  _createVNode("span", { class: "text2" }, "This is static span element.")
 ]))
 ```  
 
-1. 开启一个 `block`，`blockStack` 现在就是 `[ [] ]`  
-2. 创建 `span` 节点，并且需要追踪，所以将这个节点存入当前 `block` 中  
-3. 创建根节点 `div`，此时 `shouldTrack` 为 `0`，所以不会追踪根节点，然后将当前 `block` 挂载到根节点上，最后恢复 `blockStack` 和 `currentBlock`  
+这段代码调用顺序是这样的  
+1. 开启一个新的 `block`  
+2. 创建两个 `span` 节点，并将第一个放入当前 `block` 中，视为需要追踪的节点  
+3. 创建根节点 `div`，并挂载需要追踪的节点集合，最后释放当前的 `block`  
 
 根节点的 `dynamicChildren` 保存了追踪的节点 `span`  
 
-### 示例二 
+### 示例二 嵌套使用 openBlock  
+
+```typescript
+const hoist = createVNode('div', { class: 'hoist' });
+let vnode1, vnode2, vnode3;
+const vnode = (openBlock(), createBlock('div', { class: 'root' }, [
+  hoist,
+  vnode1 = createVNode('div', { class: 'text1' }, 'text', PatchFlags.TEXT),
+  vnode2 = (openBlock(), createBlock('div', { class: 'content' }, [
+    hoist,
+    vnode3 = createVNode('div', { class: 'text2' }, 'text', PatchFlags.TEXT)
+  ]))
+]))
+```  
+
+1. 开启一个新的 `block`( 称为 `block1` )，创建 `vnode1` 节点，并存入 `block1` 中，需要追踪
+2. 在开启一个新的 `block`( 称为 `block2` )，创建 `vnode3` 节点，并存入 `block2` 中，需要追踪  
+3. 创建 `vnode2` 根节点，将它的子节点中，需要追踪的节点记录下来，即 `block2` 中的节点  
+4. 恢复当前 `block` 为 `block1`，此时会将 `vnode2` 存入 `block1` 中  
+5. 创建 `vnode` 根节点，并挂载需要追踪的节点   
+
+### 示例三 特殊节点也需要追踪  
+
+在 `createVNode` ④ 处的逻辑可以看到，需要追踪的节点有以下情况  
+1. `patchFlag` 仅仅是 `HYDRATE_EVENTS` 时，不会追踪  
+2. `patchFlag` 为有效值，会追踪  
+3. suspense 组件、stateful 组件、function component 组件，都需要追踪  
+
+```typescript
+let vnode1, vnode2
+const vnode = (openBlock(), createBlock('div', { class: 'root' }, [
+  vnode1 = createVNode('div', null, 'text', PatchFlags.HYDRATE_EVENTS),
+  vnode2 = createVNode('div', null, 'text', PatchFlags.TEXT),
+  vnode3 = createVNode({}, null, 'text'),
+  vnode4 = createVNode(() => {}, null, 'text'),
+  vnode5 = createVNode({ __isSuspense: true }, null, 'text'),
+]))
+```  
+
+上面代码中，只有 `vnode2`、`vnode3`、`vnode4` 和 `vnode5` 会被视为需要追踪的节点  
+
+## normalizeVNode  
+
+这个

@@ -9,6 +9,7 @@
 - [对比方法](#对比方法)
     - [patchElement](#patchelement)
     - [patchProps](#patchprops)
+    - [patchChildren](#patchchildren)
 - [执行操作方法](#执行操作方法)
     - [process前置说明](#process前置说明)
     - [processElement](#processelement)
@@ -50,6 +51,15 @@ const isReservedProp = {
 Vue3.0 支持自定义渲染器，用来在不同平台上进行节点的渲染，首先需要创建一个渲染器，并且提供在不同平台上操作节点的一系列函数，具体如下  
 
 ```typescript
+export function createRenderer<
+    HostNode = RendererNode,
+    HostElement = RendererElement
+>(options: RendererOptions<HostNode, HostElement>) {
+    return baseCreateRenderer<HostNode, HostElement>(options)
+}
+```  
+
+```typescript
 function baseCreateRenderer (
     options: RendererOptions,
     createHydrationFns?: typeof createHydrationFunctions
@@ -58,7 +68,7 @@ function baseCreateRenderer (
     const {
         insert: hostInsert,                             // 插入
         remove: hostRemove,                             // 移除
-        patchProp: hostPatchProp,                       // 比较 props
+        patchProp: hostPatchProp,                       // 设置 props
         createElement: hostCreateElement,               // 创建元素节点
         createText: hostCreateText,                     // 创建文本节点
         createComment: hostCreateComment,               // 创建注释节点
@@ -109,7 +119,6 @@ function baseCreateRenderer (
 
     const remove = ( /**/ ) => { /**/ }
     const removeFragment = ( /**/ ) => { /**/ }
-    const removeFragment = ( /**/ ) => { /**/ }
 
     const render = ( /**/ ) => { /**/ }
 
@@ -122,7 +131,7 @@ function baseCreateRenderer (
 ```  
 
 ## 参数  
-对于上面的几个操作内，基本都有共同的参数，接下来会说明参数的意义，在每一次渲染都会调用，所以存在 “第一次” 和 “非第一次” 两种情况  
+对于上面的几个操作内，基本都有共同的参数，接下来统一说明参数的意义，在每一次渲染都会调用，所以存在 “第一次” 和 “非第一次” 两种情况  
 
 1. `n1`: 老节点，是一个 `vNode` 对象，如果是第一次则为 `null`  
 2. `n2`: 新节点，是一个 `vNode` 对象  
@@ -133,7 +142,7 @@ function baseCreateRenderer (
 # 对比方法  
 
 ## patchElement  
-这个方法只会在 `processElement` 内调用，且新老节点属于同一类型的节点  
+这个方法只会在 [processElement](#processElement)` 内调用，且新老节点属于同一类型的节点  
 
 ```typescript
 const patchElement = (
@@ -205,7 +214,7 @@ const patchElement = (
 ```  
 
 ## patchProps  
-这个方法用来比较前后两次渲染 `props` 的变化，并设置到真实节点，只会在 [patchElement](#patchElement)` 中调用，所以新老节点是可以复用的  
+这个方法只会在 [patchElement](#patchElement) 中调用，所以新老节点是可以复用的，用来比较前后两次渲染 `props` 的变化，并设置到真实节点 `el`  
 
 ```typescript
 const patchProps = (
@@ -262,7 +271,142 @@ const patchProps = (
         }
     }
 }
-```
+```  
+
+## patchChildren  
+这个方法用于比较子节点的差异，调用场景有两个 
+1. 当前渲染不是第一次，且新节点和旧节点属于同一节点，还处于非优化模式  
+
+```typescript
+const patchChildren: PatchChildrenFn = (
+    n1,
+    n2,
+    container,          // 复用的真实节点
+    anchor,
+    parentComponent,
+    parentSuspense,
+    isSVG,
+    optimized = false
+) => {
+    const c1 = n1 && n1.children                    // 获取老的子节点
+    const prevShapeFlag = n1 ? n1.shapeFlag : 0     // 获取老节点的 shapeFlag
+    const c2 = n2.children                          // 获取新的子节点
+    const { patchFlag, shapeFlag } = n2             // 获取新节点的 shapeFlag 和 patchFlag
+
+    if (patchFlag === PatchFlags.BAIL) {
+        optimized = false
+    }
+
+    if (patchFlag > 0) {
+        if (patchFlag & PatchFlags.KEYED_FRAGMENT) {
+            // this could be either fully-keyed or mixed (some keyed some not)
+            // presence of patchFlag means children are guaranteed to be arrays
+            patchKeyedChildren(
+                c1 as VNode[],
+                c2 as VNodeArrayChildren,
+                container,
+                anchor,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+            return
+        } else if (patchFlag & PatchFlags.UNKEYED_FRAGMENT) {
+            // unkeyed
+            patchUnkeyedChildren(
+                c1 as VNode[],
+                c2 as VNodeArrayChildren,
+                container,
+                anchor,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+            return
+        }
+    }
+
+    // 开始检测老节点和新节点子节点的类型
+    // 子节点共有三种类型，文本(text)，列表(array)，没有(none)
+    if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
+        // now: text
+ 
+        if (prevShapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+            // now: text
+            // prev: array
+            // 现在是文本节点，之前是列表节点，需要将列表节点卸载
+            unmountChildren(c1 as VNode[], parentComponent, parentSuspense)
+        }
+
+        if (c2 !== c1) {
+            // now: text
+            // 当前是文本节点，如果和之前不相同，都需要重新设置内容
+            hostSetElementText(container, c2 as string)
+        }
+    } else {
+        // now: array | none
+
+        if (prevShapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+            // now: array | none
+            // prev: array
+
+            if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+                // now: array
+                // prev: array
+                // 新旧两次都是列表，需要 diff 比较
+                patchKeyedChildren(
+                    c1 as VNode[],
+                    c2 as VNodeArrayChildren,
+                    container,
+                    anchor,
+                    parentComponent,
+                    parentSuspense,
+                    isSVG,
+                    optimized
+                )
+            } else {
+                // now: none
+                // prev: array
+                // 现在没有子节点，仅需要卸载旧的列表节点
+                unmountChildren(c1 as VNode[], parentComponent, parentSuspense, true)
+            }
+        } else {
+            // now: array | none
+            // prev: text | none
+
+            if (prevShapeFlag & ShapeFlags.TEXT_CHILDREN) {
+                // now: array | none
+                // prev: text
+                hostSetElementText(container, '')
+            }
+
+            if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+                // now: array
+                // prev: text | none
+                // 如果现在是列表，而之前不是，则挂载列表节点
+                mountChildren(
+                    c2 as VNodeArrayChildren,
+                    container,
+                    anchor,
+                    parentComponent,
+                    parentSuspense,
+                    isSVG,
+                    optimized
+                )
+            }
+        }
+    }
+}
+```  
+
+这个方法的流程图可以参照下面  
+
+![patchChildren流程](./imgs/patchChildren.jpg)  
+
+可以看出来，这个方法主要的目的就是对新老子节点的差异进行了处理  
+
 
 # 执行操作方法  
 执行操作方法都是以 `process` 开头，是处理渲染节点的入口函数，但具体是第一次渲染（ 需要挂载 ），还是非第一次渲染（ 需要比较新老节点的差异 ），则会由其他函数执行，`process` 函数里只做一个判断  
@@ -270,9 +414,28 @@ const patchProps = (
 ## process前置说明  
 下面几个 `process` 方法都是在 [patch]($patch) 函数内部调用的，而在 [patch]($patch) 内一开始，就会判断新老节点是否属于同一节点  
 如果不属于同一节点，那么会将 `n1` 设置为 `null`，代表本次渲染的是一个新的节点，没有老节点，所以之后 `process` 内都会走挂载流程  
+例如，上一次渲染的是  
+
+```markdown
+<ul>
+    <li>item 0</li>
+    <li>item 1</li>
+    <li>item 2</li>
+</ul>
+```  
+
+而本次渲染的是  
+
+```markdown
+<div>
+    <span>hello</span>
+</div>
+```  
+
 如果属于同一节点，之后的 `process` 内会走更新流程，而且更新流程内是可以直接复用老的真实节点的，它们属于同一类型的节点  
 
 ## processElement  
+这个方法只在 [patch](#patch) 内调用，用于处理当前渲染的是一个 **元素节点**  
 
 ```typescript
 const processElement = (
@@ -308,6 +471,7 @@ const processElement = (
 ```  
 
 ## processText  
+这个方法只在 [patch](#patch) 内调用，用于处理当前渲染的是一个 **文本节点**  
 
 ```typescript
 type ProcessTextOrCommentFn = (
@@ -328,7 +492,7 @@ const processText: ProcessTextOrCommentFn = ( n1, n2, container, anchor ) => {
         )
     } else {
         // ①
-        // 非第一次渲染，因为文本节点只有内容，没有其他的 props
+        // 非第一次渲染，因为文本节点只有内容，没有其他的 props，所以不需要额外的处理，只管里面的内容
         // 所以直接复用老的真实节点，而且只有文本内容不一致时，才会更新真实节点的内容为新的内容
         const el = (n2.el = n1.el!)
         if ( n2.children !== n1.children ) {
@@ -344,7 +508,7 @@ const processText: ProcessTextOrCommentFn = ( n1, n2, container, anchor ) => {
 # 挂载阶段  
 
 ## mountElement  
-这个函数用来创建元素节点，并挂载到父元素上，只有在 `processElement` 内部才会调用，所以有两种情况  
+这个函数用来创建元素节点，并挂载到父元素上，只有在 [processElement](#processElement) 内部才会调用，所以有两种情况  
 1. 当前渲染的节点是第一次  
 2. 当前渲染的节点不是第一次，而且老节点和新节点不是同一类型的节点，参考 [process前置说明](#process前置说明)  
 
@@ -385,6 +549,7 @@ const mountElement = (
             props && props.is
         );
 
+        // 处理 props
         if (props) {
             for (const key in props) {
                 // 过滤掉 isReservedProp 中的属性
@@ -457,7 +622,8 @@ const mountElement = (
 }
 ```  
 
-1. ① 处调用 `mountChildren` 时，第三个参数（ 即 `anchor` ）传递的是 `null`，也就是说，当挂载节点的子节点是一个列表时，那么这些子节点会依次追加到 `el` 里的最后一个，保证和原始列表顺序一致，不会发生在某个节点中间插入的情况  
+1. ① 处调用 `mountChildren` 时，第二个参数是真实节点 `el`，所以在 `mountChildren` 内调用 `patch` 时，都会将子节点挂载到 `el` 上  
+第三个参数（ 即 `anchor` ）传递的是 `null`，那么这些子节点会依次追加到 `el` 里的最后一个，保证和原始列表顺序一致，不会发生在某个节点中间插入的情况  
 
 ## mountChildren  
 这个函数用来挂载子节点列表  
@@ -473,11 +639,15 @@ const mountChildren: MountChildrenFn = (
     optimized,
     start = 0
 ) => {
+    // 遍历子节点列表
     for (let i = start; i < children.length; i++) {
+        // 获取当前子节点的 vnode，根据是否优化有两种获取方式
         const child = (children[i] = optimized
             ? cloneIfMounted(children[i] as VNode)
             : normalizeVNode(children[i]))
-        // 
+
+        // ① 
+        // 对每个子节点进行 patch 操作
         patch(
             null,
             child,
@@ -490,4 +660,7 @@ const mountChildren: MountChildrenFn = (
         )
     }
 }
-```
+```  
+
+1. ① 处调用 `patch` 时，第一个参数（ 老节点 ）传递的是 `null`，也就代表这是一个新的节点，需要挂载  
+

@@ -18,6 +18,8 @@
     - [patchElement](#patchelement)
     - [patchProps](#patchprops)
     - [patchChildren](#patchchildren)
+    - [patchKeyedChildren](#patchkeyedchildren)
+        - [处理其他情况](#处理其他情况)
 
 <!-- /TOC -->
 
@@ -777,4 +779,237 @@ const patchChildren: PatchChildrenFn = (
 ![patchChildren流程](./imgs/patchChildren.jpg)  
 
 可以看出来，这个方法主要的目的就是对新老子节点的差异进行了处理    
+
+## patchKeyedChildren  
+这个方法主要就是对 **新老子节点列表** 寻找差异并解决的方法，也就是 Vue3.0 实现 diff 的逻辑  
+总共有 5 个步骤，会对 新列表 中的每一个节点进行 [patch](#patch) 操作，能复用老节点就复用，不能就新建
+1. 从头开始遍历 新老子节点 公共的部分，直至第一个不相同的节点为止，会记录下从头开始第一个不相同节点的索引 `i`  
+2. 从尾开始遍历 新老子节点 公共的部分，直至第一个不相同的节点为止，会记录下从尾开始第一个不相同节点的索引，老节点是 `e1` 新节点是 `e2`   
+3. 处理连续新增的节点，这种情况对几个值的理解  
+    `i` 可以理解为增加的起始下标(因为它是第一个不相同的索引，所以需要从这里开始增加)  
+    `e2` 可以理解为增加的终止下标(一直要增加到 `e2` 对应位置的节点，包括 `e2`)  
+    所以需要同时满足两个条件
+      * `i > e1`
+      * “待插入节点的索引” 要比 “新插入节点的最后一个索引” 小或相等，即 `i <= e2`
+    
+    <img src="./imgs/diff_add.png" width="600" />
+4. 处理连续删除的节点，这种情况对几个值的理解  
+    `i` 可以理解为删除的起始下标(因为它是第一个不相同的索引，所以需要从这里开始删除)  
+    `e1` 可以理解为删除的终止下标(一直要增加到 `e1` 对应位置的节点，包括 `e1`)  
+    所以需要同时满足两个条件  
+      * “开始删除的下标” 要比 “最后一个删除的节点索引” 小或相等，即 `i <= e1`  
+      * `i > e2`  
+      
+    <img src="./imgs/diff_remove.jpg" width="600" />
+5. 处理其他情况  
+
+    `i <= e1` && `i <= e2`
+
+```typescript
+const patchKeyedChildren = (
+    c1: VNode[],
+    c2: VNodeArrayChildren,
+    container: RendererElement,
+    parentAnchor: RendererNode | null,
+    parentComponent: ComponentInternalInstance | null,
+    parentSuspense: SuspenseBoundary | null,
+    isSVG: boolean,
+    optimized: boolean
+) => {
+    let i = 0              // 头索引
+    const l2 = c2.length   // 新子节点的长度
+    let e1 = c1.length - 1 // 老节点中尾索引
+    let e2 = l2 - 1        // 新节点中尾索引
+
+    // 1. 从头开始遍历
+    while (i <= e1 && i <= e2) {
+        const n1 = c1[i]                     // 旧 vnode 节点
+        const n2 = (c2[i] = optimized        // 新 vnode 节点，根据是否优化有两种获取方式
+            ? cloneIfMounted(c2[i] as VNode)
+            : normalizeVNode(c2[i]))
+        if (isSameVNodeType(n1, n2)) {
+            // 如果新旧两个节点属于同一类型节点，进行 patch 操作，从头开始检查新节点是否能复用，不能就新建
+            patch(
+                n1,
+                n2,
+                container,
+                parentAnchor,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+        } else {
+            // 如果不是同一类型节点，直接退出循环
+            break
+        }
+        // 如果是节点类型相同，将头索引往后移一位，最终处于从头开始第一个不相同的索引
+        i++
+    }
+
+    // 2. 从尾开始遍历
+    while (i <= e1 && i <= e2) {
+        const n1 = c1[e1]                       // 旧 vnode 节点
+        const n2 = (c2[e2] = optimized          // 新 vnode 节点，根据是否优化有两种获取方式
+            ? cloneIfMounted(c2[e2] as VNode)
+            : normalizeVNode(c2[e2]))
+        if (isSameVNodeType(n1, n2)) {
+            // 如果新旧两个节点属于同一类型节点，进行 patch 操作，从头开始检查新节点是否能复用，不能就新建
+            patch(
+                n1,
+                n2,
+                container,
+                parentAnchor,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+        } else {
+            // 如果不是同一类型节点，直接退出循环
+            break
+        }
+        // 如果是节点类型相同，将两个尾索引往前移一位
+        // 最终 e1 处于旧节点中，从后往前第一个不相同的索引，e2 处于新节点中，从后往前第一个不相同的索引
+        e1--
+        e2--
+    }
+
+    if (i > e1) {
+        // 从前开始第一个不相同的节点索引 <= 新节点从后开始第一个不相同的节点索引
+        if (i <= e2) {
+            // 存在新插入的节点，接下来要创建对应的 vnode 以及真实节点 
+            const nextPos = e2 + 1
+            const anchor = nextPos < l2 ? (c2[nextPos] as VNode).el : parentAnchor
+            while (i <= e2) {
+                patch(
+                    null,
+                    (c2[i] = optimized
+                        ? cloneIfMounted(c2[i] as VNode)
+                        : normalizeVNode(c2[i])),
+                    container,
+                    anchor,
+                    parentComponent,
+                    parentSuspense,
+                    isSVG
+                )
+                i++
+            }
+        }
+    }
+}
+```
+
+### 处理其他情况  
+
+**以下代码都在 patchKeyedChildren 里的最后一个 else 内**  
+
+1. 定义变量  
+
+```typescript
+const s1 = i // prev starting index
+const s2 = i // next starting index
+
+let j
+let patched = 0
+// 没有经过 patch 的节点个数
+const toBePatched = e2 - s2 + 1
+// 是否有移动过节点
+let moved = false
+// used to track whether any node has moved
+let maxNewIndexSoFar = 0
+```  
+
+在前面两个 `while` 循环中，会把首尾相同的节点 `patch`，这里 `toBePatched` 会记录还没有 `patch` 的节点个数，就是
+
+2. 遍历新子节点列表，将每个子节点的 `key` 以及 索引存储在 `Map` 对象 `keyToNewIndexMap`  
+
+```typescript
+const keyToNewIndexMap: Map<string | number, number> = new Map()
+for (i = s2; i <= e2; i++) {
+    const nextChild = (c2[i] = optimized
+        ? cloneIfMounted(c2[i] as VNode)
+        : normalizeVNode(c2[i]))
+    if (nextChild.key != null) {
+        keyToNewIndexMap.set(nextChild.key, i)
+    }
+}
+```
+
+3. 定义 `newIndexToOldIndexMap` 数组，其中 `index` 是新节点的索引，`value` 是旧节点的索引，所以需要使用没有被 `patch` 节点的个数初始化   
+
+```typescript
+const newIndexToOldIndexMap = new Array(toBePatched)
+for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
+```  
+
+4. 遍历老子节点列表  
+    a. 获取老节点在最新一次渲染的索引位置 `newIndex`
+      * 如果老节点存在 `key`，那么就从 `keyToNewIndexMap` 里根据 `key` 获取该老节点的最新索引位置  
+      * 如果老节点不存在 `key`   
+      
+    b. 检测获取到的 `newIndex` 是否有效  
+      * 如果为 `undefiend`，则说明这个老节点在最新一次渲染已经被删除了，所以现在需要卸载老节点  
+      * 否则需要更新 `newIndexToOldIndexMap`，记录 `index` 为新的索引，`value` 为老的索引。并检测是否存在移动节点的情况，最后 `patch` 新老节点   
+
+    ```typescript
+    // 遍历没有 patch 过的老节点列表
+    for (i = s1; i <= e1; i++) {
+        const prevChild = c1[i]
+        if (patched >= toBePatched) {
+            // all new children have been patched so this can only be a removal
+            unmount(prevChild, parentComponent, parentSuspense, true)
+            continue
+        }
+
+        // 获取当前老节点在最新一次渲染中的索引位置
+        let newIndex
+        if (prevChild.key != null) {
+            // 通过 key 的形式获取索引
+            newIndex = keyToNewIndexMap.get(prevChild.key)
+        } else {
+            // 不存在 key
+            // 遍历新节点，如果和老节点是一个节点，且没有 patch 过，那么这个新节点的索引就是老节点即将渲染的索引
+            for (j = s2; j <= e2; j++) {
+                if (
+                    newIndexToOldIndexMap[j - s2] === 0 &&
+                    isSameVNodeType(prevChild, c2[j] as VNode)
+                ) {
+                    newIndex = j
+                    break
+                }
+            }
+        }
+
+        // 检测老节点是否还存在最新一次渲染中
+        if (newIndex === undefined) {
+            // 老节点不存在索引位置，需要卸载
+            unmount(prevChild, parentComponent, parentSuspense, true)
+        } else {
+            // 更新当前节点的 新索引 和 老索引
+            newIndexToOldIndexMap[newIndex - s2] = i + 1  // [ 4, 5, 3, 0 ]
+            if (newIndex >= maxNewIndexSoFar) {
+                maxNewIndexSoFar = newIndex
+            } else {
+                moved = true
+            }
+            patch(
+                prevChild,
+                c2[newIndex] as VNode,
+                container,
+                null,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+            patched++
+        }
+    }
+    ```
+
+5. 接下来会根据 `newIndexToOldIndexMap` 生成最长稳定子序列 `increasingNewIndexSequence`  
+   所谓 “稳定” 就是指，这个节点的位置不会发生变化，所以之后只需要移动不稳定的节点即可  
+
+6. 
 

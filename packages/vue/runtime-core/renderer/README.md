@@ -782,12 +782,12 @@ const patchChildren: PatchChildrenFn = (
 
 ## patchKeyedChildren  
 这个方法主要就是对 **新老子节点列表** 寻找差异并解决的方法，也就是 Vue3.0 实现 diff 的逻辑  
-总共有 5 个步骤，会对 新列表 中的每一个节点进行 [patch](#patch) 操作，能复用老节点就复用，不能就新建
-1. 从头开始遍历 新老子节点 公共的部分，直至第一个不相同的节点为止，会记录下从头开始第一个不相同节点的索引 `i`  
-2. 从尾开始遍历 新老子节点 公共的部分，直至第一个不相同的节点为止，会记录下从尾开始第一个不相同节点的索引，老节点是 `e1` 新节点是 `e2`   
+总共有 5 个步骤，会对 新列表 中的每一个节点进行 [patch](#patch) 操作，能复用老节点就复用，不能就新建，总共有五个步骤
+1. 从头开始遍历 新老子节点 公共的部分，并 `patch` 每个节点，直至第一个不相同的节点为止，会记录下从头开始第一个不相同节点的索引 `i`  
+2. 如果第一步没有 `patch` 完全部的节点，再从尾开始遍历 新老子节点 公共的部分，并 `patch` 每个节点，直至第一个不相同的节点为止，会记录下从尾开始第一个不相同节点的索引，老节点是 `e1` 新节点是 `e2`   
 3. 处理连续新增的节点，这种情况对几个值的理解  
     `i` 可以理解为增加的起始下标(因为它是第一个不相同的索引，所以需要从这里开始增加)  
-    `e2` 可以理解为增加的终止下标(一直要增加到 `e2` 对应位置的节点，包括 `e2`)  
+    `e2` 可以理解为增加的终止下标(因为 `e2` 是新列表中最后一个不相同的节点，在旧列表中从 `i` 到 `e2` 都是不存在的，所以一直要增加到 `e2` 对应位置的节点，包括 `i` 和 `e2`)  
     所以需要同时满足两个条件
       * `i > e1`
       * “待插入节点的索引” 要比 “新插入节点的最后一个索引” 小或相等，即 `i <= e2`
@@ -795,15 +795,15 @@ const patchChildren: PatchChildrenFn = (
     <img src="./imgs/diff_add.png" width="600" />
 4. 处理连续删除的节点，这种情况对几个值的理解  
     `i` 可以理解为删除的起始下标(因为它是第一个不相同的索引，所以需要从这里开始删除)  
-    `e1` 可以理解为删除的终止下标(一直要增加到 `e1` 对应位置的节点，包括 `e1`)  
+    `e1` 可以理解为删除的终止下标(因为 `e1` 是旧列表中最后一个不相同的节点，在新列表中从 `i` 到 `e1` 都是不存在的，所以一直要删到 `e1` 对应位置的节点，包括 `i` 和 `e1`)  
     所以需要同时满足两个条件  
       * “开始删除的下标” 要比 “最后一个删除的节点索引” 小或相等，即 `i <= e1`  
       * `i > e2`  
       
     <img src="./imgs/diff_remove.jpg" width="600" />
-5. 处理其他情况  
+5. 处理其他情况，参照 [处理其他情况](#处理其他情况)  
 
-    `i <= e1` && `i <= e2`
+下面是前 4 步的代码  
 
 ```typescript
 const patchKeyedChildren = (
@@ -896,6 +896,13 @@ const patchKeyedChildren = (
                 i++
             }
         }
+    } else if (i > e2) {
+      while (i <= e1) {
+        unmount(c1[i], parentComponent, parentSuspense, true)
+        i++
+      }
+    } else {
+        // 处理其他情况
     }
 }
 ```
@@ -904,112 +911,172 @@ const patchKeyedChildren = (
 
 **以下代码都在 patchKeyedChildren 里的最后一个 else 内**  
 
+可以参照这个示例  
+
+<img
+    src="./imgs/patchKeyedChildren_demo_remove_01.png"
+    alt="从头移动节点示例"
+    style="width: 800px; display: block;"
+/>  
+
 1. 定义变量  
 
-```typescript
-const s1 = i // prev starting index
-const s2 = i // next starting index
+    ```typescript
+    const s1 = i // prev starting index
+    const s2 = i // next starting index
 
-let j
-let patched = 0
-// 没有经过 patch 的节点个数
-const toBePatched = e2 - s2 + 1
-// 是否有移动过节点
-let moved = false
-// used to track whether any node has moved
-let maxNewIndexSoFar = 0
-```  
+    let j
+    let patched = 0
+    // 没有经过 patch 的节点个数
+    const toBePatched = e2 - s2 + 1
+    // 是否有移动过节点
+    let moved = false
+    // used to track whether any node has moved
+    let maxNewIndexSoFar = 0
+    ```  
 
-在前面两个 `while` 循环中，会把首尾相同的节点 `patch`，这里 `toBePatched` 会记录还没有 `patch` 的节点个数，就是
+    在前面两个 `while` 循环中，会把首尾相同的节点 `patch`，这里 `toBePatched` 会记录还没有 `patch` 的节点个数，就是
 
-2. 遍历新子节点列表，将每个子节点的 `key` 以及 索引存储在 `Map` 对象 `keyToNewIndexMap`  
+2. 遍历新列表中没有 `patch` 的节点，将每个子节点的 `key` 以及 新的索引 存储在 `Map` 对象 `keyToNewIndexMap` 中，在之后遍历老节点的时候会根据 `key` 直接获取最新一次渲染的索引位置  
 
-```typescript
-const keyToNewIndexMap: Map<string | number, number> = new Map()
-for (i = s2; i <= e2; i++) {
-    const nextChild = (c2[i] = optimized
-        ? cloneIfMounted(c2[i] as VNode)
-        : normalizeVNode(c2[i]))
-    if (nextChild.key != null) {
-        keyToNewIndexMap.set(nextChild.key, i)
+    ```typescript
+    const keyToNewIndexMap: Map<string | number, number> = new Map()
+    for (i = s2; i <= e2; i++) {
+        // 根据是否优化，来获取新节点的 vnode
+        const nextChild = (c2[i] = optimized
+            ? cloneIfMounted(c2[i] as VNode)
+            : normalizeVNode(c2[i]))
+        if (nextChild.key != null) {
+            keyToNewIndexMap.set(nextChild.key, i)
+        }
     }
-}
-```
+    ```  
 
-3. 定义 `newIndexToOldIndexMap` 数组，其中 `index` 是新节点的索引，`value` 是旧节点的索引，所以需要使用没有被 `patch` 节点的个数初始化   
+3. 定义 `newIndexToOldIndexMap` 数组，使用没有被 `patch` 的节点个数初始化，且都为 `0`，其中 `index` 是新节点的索引，`value` 是旧节点的索引，在之后会设置   
 
-```typescript
-const newIndexToOldIndexMap = new Array(toBePatched)
-for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
-```  
+    ```typescript
+    const newIndexToOldIndexMap = new Array(toBePatched)
+    for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
+    ```  
 
 4. 遍历老子节点列表  
     a. 获取老节点在最新一次渲染的索引位置 `newIndex`
-      * 如果老节点存在 `key`，那么就从 `keyToNewIndexMap` 里根据 `key` 获取该老节点的最新索引位置  
+      * 如果老节点存在 `key`，那么就从 `keyToNewIndexMap` 里根据 `key` 获取最新索引  
       * 如果老节点不存在 `key`   
       
     b. 检测获取到的 `newIndex` 是否有效  
       * 如果为 `undefiend`，则说明这个老节点在最新一次渲染已经被删除了，所以现在需要卸载老节点  
-      * 否则需要更新 `newIndexToOldIndexMap`，记录 `index` 为新的索引，`value` 为老的索引。并检测是否存在移动节点的情况，最后 `patch` 新老节点   
+      * 否则需要更新 `newIndexToOldIndexMap`  
+        其中，它的索引是这样计算的：此时 `newIndex - s2` 就是基于第一个不相同的节点开始的索引值，而不是从头开始（ 因为 `newIndexToOldIndexMap` 的长度只有未被 `patch` 的节点个数而不是全部，所以这里设置的时候也只能算未被 `patch` 的节点索引 ）  
+        而它的值是这样计算的：此时 `i` 是从头开始的索引值，所以它的值就是从头开始的索引值 + 1    
+        所以示例中的 `newIndexToOldIndexMap` 就是 `[ 4, 2, 3 ]`
+        
 
-    ```typescript
-    // 遍历没有 patch 过的老节点列表
-    for (i = s1; i <= e1; i++) {
-        const prevChild = c1[i]
-        if (patched >= toBePatched) {
-            // all new children have been patched so this can only be a removal
-            unmount(prevChild, parentComponent, parentSuspense, true)
-            continue
-        }
+        ```typescript
+        // 遍历没有 patch 过的老节点列表
+        for (i = s1; i <= e1; i++) {
+            const prevChild = c1[i]
+            if (patched >= toBePatched) {
+                // all new children have been patched so this can only be a removal
+                unmount(prevChild, parentComponent, parentSuspense, true)
+                continue
+            }
 
-        // 获取当前老节点在最新一次渲染中的索引位置
-        let newIndex
-        if (prevChild.key != null) {
-            // 通过 key 的形式获取索引
-            newIndex = keyToNewIndexMap.get(prevChild.key)
-        } else {
-            // 不存在 key
-            // 遍历新节点，如果和老节点是一个节点，且没有 patch 过，那么这个新节点的索引就是老节点即将渲染的索引
-            for (j = s2; j <= e2; j++) {
-                if (
-                    newIndexToOldIndexMap[j - s2] === 0 &&
-                    isSameVNodeType(prevChild, c2[j] as VNode)
-                ) {
-                    newIndex = j
-                    break
+            // 获取当前老节点在最新一次渲染中的索引位置
+            let newIndex
+            if (prevChild.key != null) {
+                // 通过 key 的形式获取索引
+                newIndex = keyToNewIndexMap.get(prevChild.key)
+            } else {
+                // 不存在 key
+                // 遍历新节点，如果和老节点是一个节点，且没有 patch 过，那么这个新节点的索引就是老节点即将渲染的索引
+                for (j = s2; j <= e2; j++) {
+                    if (
+                        newIndexToOldIndexMap[j - s2] === 0 &&
+                        isSameVNodeType(prevChild, c2[j] as VNode)
+                    ) {
+                        newIndex = j
+                        break
+                    }
                 }
             }
-        }
 
-        // 检测老节点是否还存在最新一次渲染中
-        if (newIndex === undefined) {
-            // 老节点不存在索引位置，需要卸载
-            unmount(prevChild, parentComponent, parentSuspense, true)
-        } else {
-            // 更新当前节点的 新索引 和 老索引
-            newIndexToOldIndexMap[newIndex - s2] = i + 1  // [ 4, 5, 3, 0 ]
-            if (newIndex >= maxNewIndexSoFar) {
-                maxNewIndexSoFar = newIndex
+            // 检测老节点是否还存在最新一次渲染中
+            if (newIndex === undefined) {
+                // 老节点不存在索引位置，需要卸载
+                unmount(prevChild, parentComponent, parentSuspense, true)
             } else {
-                moved = true
+                // 更新当前节点的 新索引 和 老索引
+                newIndexToOldIndexMap[newIndex - s2] = i + 1
+                if (newIndex >= maxNewIndexSoFar) {
+                    maxNewIndexSoFar = newIndex
+                } else {
+                    moved = true
+                }
+                patch(
+                    prevChild,
+                    c2[newIndex] as VNode,
+                    container,
+                    null,
+                    parentComponent,
+                    parentSuspense,
+                    isSVG,
+                    optimized
+                )
+                patched++
             }
-            patch(
-                prevChild,
-                c2[newIndex] as VNode,
-                container,
-                null,
-                parentComponent,
-                parentSuspense,
-                isSVG,
-                optimized
-            )
-            patched++
         }
-    }
-    ```
+        ```  
 
 5. 接下来会根据 `newIndexToOldIndexMap` 生成最长稳定子序列 `increasingNewIndexSequence`  
    所谓 “稳定” 就是指，这个节点的位置不会发生变化，所以之后只需要移动不稳定的节点即可  
+   在 `increasingNewIndexSequence` 中，`value` 指的是稳定节点的索引( 该索引是从 `i` 开始计算的 )
 
-6. 
+   ```typescript
+    const increasingNewIndexSequence = moved
+        ? getSequence(newIndexToOldIndexMap)
+        : EMPTY_ARR
+    // 稳定子序列长度，如果每个节点都不稳定，就不会生成子序列（ 长度为 0 ）
+    j = increasingNewIndexSequence.length - 1
+   ```
 
+6. 再从后往前遍历新列表中未 `patch` 的节点  
+   * 检测节点是否是创建的新节点，检测的依据就是根据节点索引从 `newIndexToOldIndexMap` 获取值，看是否是 `0`，因为 `newIndexToOldIndexMap` 里面的值只有在遍历老节点的时候才会被设置，如果为 `0` 就代表是新创建的节点  
+   * 如果不是新创建的节点，再检测最新一次渲染是否发生了移动（ 注意，这里并不是检测具体的节点是否发生了移动，只要有任意一个节点移动即可 ）  
+      1. 如果有任意一节点发生了移动，会有两种情况才会真正的移动某一个具体的节点  
+          * 没有生成稳定子序列，说明每个节点都是不稳定的，所以每一个节点都需要移动，检测方法就是判断 `newIndexToOldIndexMap` 的长度，如果没有生成，长度就是 `0`   
+          * 生成了稳定子序列，检查当前节点是否稳定，稳定就不会移动，不稳定才会移动  
+
+    <br />  
+    
+    ```typescript
+    // 从后往前遍历未被 patch 的节点
+    for (i = toBePatched - 1; i >= 0; i--) {
+        const nextIndex = s2 + i                    // 节点索引
+        const nextChild = c2[nextIndex] as VNode    // 新节点 vnode
+        const anchor = nextIndex + 1 < l2 ? (c2[nextIndex + 1] as VNode).el : parentAnchor
+        
+        if (newIndexToOldIndexMap[i] === 0) {
+            // 挂载新节点
+            patch(
+                null,
+                nextChild,
+                container,
+                anchor,
+                parentComponent,
+                parentSuspense,
+                isSVG
+            )
+        } else if (moved) {
+            if (j < 0 || i !== increasingNewIndexSequence[j]) {
+                // 移动节点，只会有两种情况
+                //   没有稳定序列，每一个节点都需要移动
+                //   有稳定序列，但当前节点不稳定，需要移动
+                move(nextChild, container, anchor, MoveType.REORDER)
+            } else {
+                // 当前节点稳定，不需要移动
+                j--
+            }
+        }
+    }
+    ```  

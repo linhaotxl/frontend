@@ -782,7 +782,7 @@ const patchChildren: PatchChildrenFn = (
 
 ## patchKeyedChildren  
 这个方法主要就是对 **新老子节点列表** 寻找差异并解决的方法，也就是 Vue3.0 实现 diff 的逻辑  
-总共有 5 个步骤，会对 新列表 中的每一个节点进行 [patch](#patch) 操作，能复用老节点就复用，不能就新建，总共有五个步骤
+总共有 5 个步骤，会对 新列表 中的每一个节点进行 [patch](#patch) 操作，能复用老节点就复用，不能就新建
 1. 从头开始遍历 新老子节点 公共的部分，并 `patch` 每个节点，直至第一个不相同的节点为止，会记录下从头开始第一个不相同节点的索引 `i`  
 2. 如果第一步没有 `patch` 完全部的节点，再从尾开始遍历 新老子节点 公共的部分，并 `patch` 每个节点，直至第一个不相同的节点为止，会记录下从尾开始第一个不相同节点的索引，老节点是 `e1` 新节点是 `e2`   
 3. 处理连续新增的节点，这种情况对几个值的理解  
@@ -936,7 +936,7 @@ const patchKeyedChildren = (
     let maxNewIndexSoFar = 0
     ```  
 
-    在前面两个 `while` 循环中，会把首尾相同的节点 `patch`，这里 `toBePatched` 会记录还没有 `patch` 的节点个数，就是
+    在前面两个 `while` 循环中，会把首尾相同的节点 `patch`，这里 `toBePatched` 会记录还没有 `patch` 的节点个数
 
 2. 遍历新列表中没有 `patch` 的节点，将每个子节点的 `key` 以及 新的索引 存储在 `Map` 对象 `keyToNewIndexMap` 中，在之后遍历老节点的时候会根据 `key` 直接获取最新一次渲染的索引位置  
 
@@ -953,14 +953,15 @@ const patchKeyedChildren = (
     }
     ```  
 
-3. 定义 `newIndexToOldIndexMap` 数组，使用没有被 `patch` 的节点个数初始化，且都为 `0`，其中 `index` 是新节点的索引，`value` 是旧节点的索引，在之后会设置   
+3. 定义 `newIndexToOldIndexMap` 数组，长度为没有被 `patch` 的节点个数，且初始值都为 `0`  
+   其中的每个元素都会和没有被 `patch` 的节点对应，所以 `index` 是新节点的索引，`value` 是旧节点的索引，在之后会设置   
 
     ```typescript
     const newIndexToOldIndexMap = new Array(toBePatched)
     for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
     ```  
 
-4. 遍历老子节点列表  
+4. 遍历老节点列表  
     a. 获取老节点在最新一次渲染的索引位置 `newIndex`
       * 如果老节点存在 `key`，那么就从 `keyToNewIndexMap` 里根据 `key` 获取最新索引  
       * 如果老节点不存在 `key`   
@@ -968,8 +969,8 @@ const patchKeyedChildren = (
     b. 检测获取到的 `newIndex` 是否有效  
       * 如果为 `undefiend`，则说明这个老节点在最新一次渲染已经被删除了，所以现在需要卸载老节点  
       * 否则需要更新 `newIndexToOldIndexMap`  
-        其中，它的索引是这样计算的：此时 `newIndex - s2` 就是基于第一个不相同的节点开始的索引值，而不是从头开始（ 因为 `newIndexToOldIndexMap` 的长度只有未被 `patch` 的节点个数而不是全部，所以这里设置的时候也只能算未被 `patch` 的节点索引 ）  
-        而它的值是这样计算的：此时 `i` 是从头开始的索引值，所以它的值就是从头开始的索引值 + 1    
+        更新逻辑是这样的，首选要找到更新的索引，此时 `newIndex - s2` 就是基于第一个不相同的节点开始的索引值，而不是从头开始（ 因为 `newIndexToOldIndexMap` 只对应没有被 `patch` 的节点而不是全部节点，所以这里计算索引的时候只能计算未被 `patch` 的节点索引 ）  
+        而更新的值是这样计算的：此时 `i` 是从头开始的索引值，所以它的值就是从头开始的索引值 + 1    
         所以示例中的 `newIndexToOldIndexMap` 就是 `[ 4, 2, 3 ]`
         
 
@@ -1031,7 +1032,7 @@ const patchKeyedChildren = (
 
 5. 接下来会根据 `newIndexToOldIndexMap` 生成最长稳定子序列 `increasingNewIndexSequence`  
    所谓 “稳定” 就是指，这个节点的位置不会发生变化，所以之后只需要移动不稳定的节点即可  
-   在 `increasingNewIndexSequence` 中，`value` 指的是稳定节点的索引( 该索引是从 `i` 开始计算的 )
+   <!-- 在 `increasingNewIndexSequence` 中，`value` 指的是稳定节点的索引( 该索引是从 `i` 开始计算的 ) -->
 
    ```typescript
     const increasingNewIndexSequence = moved
@@ -1041,6 +1042,8 @@ const patchKeyedChildren = (
     j = increasingNewIndexSequence.length - 1
    ```   
 
+   示例中的 `2` 和 `3` 两个节点就是稳定的，不需要移动，而 `4` 是不稳定的，所以需要移动一次 `4` 就可以，所以 `increasingNewIndexSequence` 就是 `[ 1, 2 ]`  
+   
 6. 再从后往前遍历新列表中未 `patch` 的节点  
    * 检测节点是否是创建的新q节点，检测的依据就是根据节点索引从 `newIndexToOldIndexMap` 获取值，看是否是 `0`，因为 `newIndexToOldIndexMap` 里面的值只有在遍历老节点的时候才会被设置，如果为 `0` 就代表是新创建的节点  
    * 如果不是新创建的节点，再检测最新一次渲染是否发生了移动（ 注意，这里并不是检测具体的节点是否发生了移动，只要有任意一个节点移动即可 ）  

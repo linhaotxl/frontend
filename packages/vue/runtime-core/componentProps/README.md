@@ -4,7 +4,11 @@
 1. [def 函数](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#def)
 2. [camelize 函数]()
 
-
+- [初始化 props](#初始化-props)
+    - [normalizePropsOptions](#normalizepropsoptions)
+    - [setFullProps](#setfullprops)
+    - [resolvePropValue](#resolvepropvalue)
+- [更新 props](#更新-props)
 
 # 初始化 props  
 初始化 `props` 只会在第一次安装组件的时候执行，也就是 [setupComponent](https://github.com/linhaotxl/frontend/tree/master/packages/vue/runtime-core/component#setupComponent) 函数  
@@ -151,6 +155,169 @@ export function normalizePropsOptions( raw: ComponentPropsOptions | undefined ):
 }
 ```  
 
+总结  
+1. 这个函数返回一个数组，第一个元素是配置对象的集合，第二个元素是需要转换的 `prop` 的名称  
+    有两种情况说明这个 `prop` 需要转换  
+    * 存在默认值 `default`  
+    * 可能是 `Boolean` 的情况，因为 `Boolean` 会有额外的处理，后面会看到  
 
+2. 对于上面生成的两个数据中，所有 `prop` 的名称都会被经过驼峰处理，所以存储的都是驼峰形式的属性名  
+
+## BooleanFlags  
+这是一个枚举，有两个值，在 [normalizePropsOptions](#normalizePropsOptions)  函数中，会设置给属性的配置对象，在接下来解析的函数 [resolvePropValue](#resolvePropValue) 中会用到  
+
+```typescript
+const enum BooleanFlags {
+    shouldCast,
+    shouldCastTrue
+}
+```  
+
+* `shouldCast` 表示是否存在 `Boolean` 的属性  
+* `shouldCastTrue` 表示是否需要将属性的值转换为 `true`
+
+## setFullProps  
+这个方法会全量的更新组件的 `props`，大致分为两个步骤  
+1. 遍历传递给组件的所有 `props`，如果组件定义了需要接受这个 `prop`，那么就会将其放在组件实例的 `props` 上，否则放在 `attrs` 上  
+2. 处理需要转换的所有 `props`，将处理结果重新写入组件实例的 `props` 上  
+
+```typescript
+/**
+ * @param { ComponentInternalInstance } instance 组件实例
+ * @param { Data | null }               rawProps 原始 props，也就是标签上写的
+ * @param { Data }                      props 最终被挂载在组件实例上的 props
+ * @param { Data }                      attrs 最终被挂载在组件实例上的 attrs
+ */
+function setFullProps(
+    instance: ComponentInternalInstance,
+    rawProps: Data | null,
+    props: Data,
+    attrs: Data
+) {
+    // 获取 props 配置对象和需要转换的 props 集合
+    const { 0: options, 1: needCastKeys } = normalizePropsOptions( instance.type.props )
+    const emits = instance.type.emits
+
+    // 检测使用组件的时候，是否传递了 props
+    if ( rawProps ) {
+        // 遍历标签上的 props
+        for (const key in rawProps) {
+            const value = rawProps[key]
+            
+            // 过滤内置 prop，内置 prop 不作处理
+            if ( isReservedProp(key) ) {
+                continue
+            }
+            
+            // 这里的 key 是传递给组件的 prop，所以可能是 kabab-case，会先将其转换为 camel-case 的形式
+            // 然后检测其是否在配置对象中，因为配置对象中的属性名也是 camel-case
+            let camelKey
+            if ( options && hasOwn(options, (camelKey = camelize(key))) ) {
+                // 存在放入组件实例的 props 中
+                props[camelKey] = value
+            } else if ( !emits || !isEmitListener(emits, key) ) {
+                // 不存在放入组件实例的 attrs 中，注意这里存放的并不是 camel-case 形式，而是原始的 key
+                // Any non-declared (either as a prop or an emitted event) props are put
+                // into a separate `attrs` object for spreading. Make sure to preserve
+                // original key casing
+                attrs[key] = value
+            }
+        }
+    }
+
+    // 处理需要转换的 props
+    if ( needCastKeys ) {
+        const rawCurrentProps = toRaw( props )
+        for (let i = 0; i < needCastKeys.length; i++) {
+            const key = needCastKeys[i]
+            // 通过 resolvePropValue 来获取转换后的值，然后重写组件实例 props 中的值
+            props[key] = resolvePropValue(
+                options!,
+                rawCurrentProps,
+                key,
+                rawCurrentProps[key]
+            )
+        }
+    }
+}
+```  
+
+## resolvePropValue  
+这个方法主要处理需要转换的 `prop`，并返回转换后的值，主要有两种情况会转换  
+1. 存在默认值 `default`  
+2. `Boolean` 类型的属性  
+
+    如果一个属性定义的类型是 `Boolean` 但是实际传入的却不是 `Boolean`，此时就会对其进行转化处理，例如 `Comp` 组件会接受一个 `Boolean` 的属性  
+    ```typescript
+    const Comp = {
+        props: {
+            foo: Boolean
+        }
+    }
+    ```  
+    但传入的却是其他类型的值  
+    ```html
+    <!-- 示例一: 不传，此时会被解析为 false -->
+    <Comp />
+    <!-- 示例二: 传入空字符传，此时会被解析为 false -->
+    <Comp foo="" />
+    <!-- 示例三: 传入和属性名相同的字符串，此时会被解析为 true -->
+    <Comp foo="foo" />
+    <!-- 示例四: 剩余情况，都会被解析为 false -->
+    <Comp foo="aaa" />
+    ```  
+
+接下来具体的实现  
+
+```typescript
+/**
+ * @param { NormalizedPropsOptions[0] } options 组件的配置对象
+ * @param { Data }                      props   组件的配置对象
+ * @param { string }                    key     处理的属性名，这是肯定是一个 camel-case 的形式
+ * @param { unknown }                   value   当前属性名 key，在组件上传递的属性值
+ */
+function resolvePropValue(
+  options: NormalizedPropsOptions[0],
+  props: Data,
+  key: string,
+  value: unknown
+) {
+    // 获取执行属性的配置对象
+    const opt = options[key]
+    if ( opt != null ) {
+        // 检测是否存在默认值
+        const hasDefault = hasOwn(opt, 'default')
+
+        // 默认值生效的条件是存在默认值，且本身的值是 undefined
+        if ( hasDefault && value === undefined ) {
+            // 处理 default value
+            const defaultValue = opt.default
+            value = isFunction(defaultValue) ? defaultValue() : defaultValue
+        }
+
+        // 处理 Boolean 的转化
+        // 首先检测是否存在 Boolean
+        if ( opt[BooleanFlags.shouldCast] ) {
+            // 如果没有提供这个 prop，且没有默认值，就把它设置为 false，对应上面的示例一
+            if (!hasOwn(props, key) && !hasDefault) {
+                value = false
+            }
+            // 检测是否需要转换为 true，以下两种情况都需要转换
+            // 当传递的是空字符串，对应上面的示例二
+            // 当传递的值和属性名相同，注意这里会将属性名转换为 kabab-case，
+            else if (
+                opt[BooleanFlags.shouldCastTrue] &&
+                (value === '' || value === hyphenate(key))
+            ) {
+                // 此时 prop 肯定声明了 boolean，但如果没有声明 string，或者声明了 string，但是 string 在 boolean 的后面
+                // 即 [ boolean, string ]
+                // 此时会检测 prop 的值，如果为空字符串，或者转换为 kabek-case 与 key 相同，则被视为 true
+                value = true
+            }
+        }
+    }
+    return value
+}
+```
 
 # 更新 props

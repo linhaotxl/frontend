@@ -4,22 +4,32 @@
 1. [def 函数](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#def)
 2. [camelize 函数]()
 
-- [初始化 props](#初始化-props)
-    - [normalizePropsOptions](#normalizepropsoptions)
-    - [setFullProps](#setfullprops)
-    - [resolvePropValue](#resolvepropvalue)
-- [更新 props](#更新-props)
+<!-- TOC -->
 
-# 初始化 props  
-初始化 `props` 只会在第一次安装组件的时候执行，也就是 [setupComponent](https://github.com/linhaotxl/frontend/tree/master/packages/vue/runtime-core/component#setupComponent) 函数  
-实现流程：  
+- [initProps](#initprops)
+    - [2.1. normalizePropsOptions](#21-normalizepropsoptions)
+    - [2.2. BooleanFlags](#22-booleanflags)
+    - [2.3. setFullProps](#23-setfullprops)
+    - [2.4. resolvePropValue](#24-resolvepropvalue)
+- [3. 更新 props](#3-更新-props)
+    - [全量更新](#全量更新)
+    - [优化更新](#优化更新)
+
+<!-- /TOC -->
+
+# initProps  
+`initProps` 用于初始化组件的 `props`，只会在第一次安装组件的时候执行，也就是 [setupComponent](https://github.com/linhaotxl/frontend/tree/master/packages/vue/runtime-core/component#setupComponent) 里会执行一次  
+
+实现流程：
 1. 对于每一个组件来说，都可以定义需要接受的 `props`，然后会遍历我们实际传递的 `props`，检测实际传递的是否存在于组件声明中的，如果存在，会放入组件实例的 `props` 中，否则会放入组价实例的 `attrs` 中  
-2. 源码中对每一个属性名都会转驼峰处理，也就是说 `max-age` 和 `maxAge` 是同一个属性  
+2. 源码中对每一个属性名都会转驼峰处理，也就是说 `max-age` 和 `maxAge` 是同一个属性，例如下面这个组件  
 
+接下来看 `initProps` 的具体实现  
+ 
 ```typescript
 /**
  * @param { ComponentInternalInstance } instance    组件实例
- * @param { Data | null }               rawProps    原始属性集合，即标签上写的
+ * @param { Data | null }               rawProps    原始属性集合，即标签上写的所有属性集合
  * @param { number }                    isStateful  是否是状态组件
  * @param { boolean }                   isSSR       是否 ssr
  */
@@ -63,10 +73,13 @@ export function initProps(
 可以看到  
 1. 对于状态组件，它的 `props` 会经过 `shalloReactive` 的转换  
 2. 对于函数组件，如果组件本身没有定义需要接受的 `props`，那么它的 `props` 和 `attrs` 会指向同一对象  
+    ```typescript
+    const Comp = () => 'Comp';
+    ```  
+    
+`initProps` 会通过 `setFullProps` 来设置，但在 `setFullProps` 中会首先调用 `normalizePropsOptions` 这个函数，所以先来看这个函数做了什么  
 
-在 `setFullProps` 中会首先调用 `normalizePropsOptions` 这个函数，所以先来看这个函数  
-
-## normalizePropsOptions  
+## 2.1. normalizePropsOptions  
 每个组件定义的 `props` 格式会有多种，可以是数组，对象，如下  
 
 ```typescript
@@ -78,11 +91,13 @@ const Comp2 = {
     props: {
         name: { type: String },
         age: { type: Number, default: 24 },
+        sex: String,
+        score: [ String, Number ]
     }
 }
 ```  
 
-所以这个函数的作用就是将这个 `props` 进行统一的格式处理，将每个 `prop` 转换为特殊的 “配置对象”  
+所以这个函数的作用就是将 `props` 进行统一的格式处理，将每个 `prop` 转换为特殊的 “配置对象”  
 
 ```typescript
 /**
@@ -94,15 +109,14 @@ export function normalizePropsOptions( raw: ComponentPropsOptions | undefined ):
         return EMPTY_ARR as any
     }
 
-    // 在最后会将解析完成的对象挂载在 props 上，如果再次访问的话会直接获取，不会进行第二次的解析
+    // 在最后会将解析完成的对象挂载在 props 的 _n，如果再次访问的话会直接获取，不会进行第二次的解析
     // 因为组件的 props 是不会变的，所以只需要解析一次就够了
     if ((raw as any)._n) {
         return (raw as any)._n
     }
 
-    // 存储属性名的驼峰名，以及配置对象
-    const normalized: NormalizedPropsOptions[0] = {}
-    const needCastKeys: NormalizedPropsOptions[1] = []
+    const normalized: NormalizedPropsOptions[0] = {}    // 配置对象集合
+    const needCastKeys: NormalizedPropsOptions[1] = []  // 需要转换的 prop 名称
 
     // 处理 props
     if ( isArray(raw) ) {
@@ -120,7 +134,7 @@ export function normalizePropsOptions( raw: ComponentPropsOptions | undefined ):
         // props 为对象
         // 遍历 props
         for (const key in raw) {
-            // 将 key 驼峰化
+            // 将 “属性名” 驼峰化
             const normalizedKey = camelize(key)
             if (validatePropName(normalizedKey)) {
                 const opt = raw[key]
@@ -163,7 +177,7 @@ export function normalizePropsOptions( raw: ComponentPropsOptions | undefined ):
 
 2. 对于上面生成的两个数据中，所有 `prop` 的名称都会被经过驼峰处理，所以存储的都是驼峰形式的属性名  
 
-## BooleanFlags  
+## 2.2. BooleanFlags  
 这是一个枚举，有两个值，在 [normalizePropsOptions](#normalizePropsOptions)  函数中，会设置给属性的配置对象，在接下来解析的函数 [resolvePropValue](#resolvePropValue) 中会用到  
 
 ```typescript
@@ -176,7 +190,7 @@ const enum BooleanFlags {
 * `shouldCast` 表示是否存在 `Boolean` 的属性  
 * `shouldCastTrue` 表示是否需要将属性的值转换为 `true`
 
-## setFullProps  
+## 2.3. setFullProps  
 这个方法会全量的更新组件的 `props`，大致分为两个步骤  
 1. 遍历传递给组件的所有 `props`，如果组件定义了需要接受这个 `prop`，那么就会将其放在组件实例的 `props` 上，否则放在 `attrs` 上  
 2. 处理需要转换的所有 `props`，将处理结果重新写入组件实例的 `props` 上  
@@ -210,7 +224,7 @@ function setFullProps(
             }
             
             // 这里的 key 是传递给组件的 prop，所以可能是 kabab-case，会先将其转换为 camel-case 的形式
-            // 然后检测其是否在配置对象中，因为配置对象中的属性名也是 camel-case
+            // 然后检测其是否在配置对象中，因为配置对象中的属性名都是 camel-case
             let camelKey
             if ( options && hasOwn(options, (camelKey = camelize(key))) ) {
                 // 存在放入组件实例的 props 中
@@ -242,12 +256,15 @@ function setFullProps(
 }
 ```  
 
-## resolvePropValue  
+注意：
+1. 在 `attrs` 中的属性名，依旧是原始的属性名，而在 `props` 里的属性名，都是转换后的 camel-case 形式  
+
+## 2.4. resolvePropValue  
 这个方法主要处理需要转换的 `prop`，并返回转换后的值，主要有两种情况会转换  
 1. 存在默认值 `default`  
-2. `Boolean` 类型的属性  
+2. 存在 `Boolean` 类型的属性
 
-    如果一个属性定义的类型是 `Boolean` 但是实际传入的却不是 `Boolean`，此时就会对其进行转化处理，例如 `Comp` 组件会接受一个 `Boolean` 的属性  
+    如果一个属性定义的类型是 `Boolean` 但是实际传入的却不是 `Boolean`，此时就会对其进行转化处理，例如 `Comp` 组件会接受一个 `Boolean` 的属性 `foo`  
     ```typescript
     const Comp = {
         props: {
@@ -267,14 +284,14 @@ function setFullProps(
     <Comp foo="aaa" />
     ```  
 
-接下来具体的实现  
+接下来看具体的实现  
 
 ```typescript
 /**
  * @param { NormalizedPropsOptions[0] } options 组件的配置对象
- * @param { Data }                      props   组件的配置对象
- * @param { string }                    key     处理的属性名，这是肯定是一个 camel-case 的形式
- * @param { unknown }                   value   当前属性名 key，在组件上传递的属性值
+ * @param { Data }                      props   组件实例上的 props
+ * @param { string }                    key     待处理的属性名，这肯定是一个 camel-case 的形式
+ * @param { unknown }                   value   使用组件传递的值
  */
 function resolvePropValue(
   options: NormalizedPropsOptions[0],
@@ -282,7 +299,7 @@ function resolvePropValue(
   key: string,
   value: unknown
 ) {
-    // 获取执行属性的配置对象
+    // 获取属性的配置对象
     const opt = options[key]
     if ( opt != null ) {
         // 检测是否存在默认值
@@ -309,9 +326,6 @@ function resolvePropValue(
                 opt[BooleanFlags.shouldCastTrue] &&
                 (value === '' || value === hyphenate(key))
             ) {
-                // 此时 prop 肯定声明了 boolean，但如果没有声明 string，或者声明了 string，但是 string 在 boolean 的后面
-                // 即 [ boolean, string ]
-                // 此时会检测 prop 的值，如果为空字符串，或者转换为 kabek-case 与 key 相同，则被视为 true
                 value = true
             }
         }
@@ -320,4 +334,108 @@ function resolvePropValue(
 }
 ```
 
-# 更新 props
+# 3. 更新 props  
+更新步骤可以分为两类  
+1. 全量更新，这种情况会遍历所有的 `props` 依次更新  
+2. 优化更新，这种情况只会遍历会改变的 `props`  
+
+大致代码如下  
+
+```typescript
+/**
+ * @param { ComponentInternalInstance } instance  组件实例
+ * @param { Data | null }               rawProps  新的原始 props
+ * @param { Data | null }               rawProps  旧的原始 props
+ * @param { boolean }                   optimized 是否使用优化
+ */
+function updateProps(
+    instance: ComponentInternalInstance,
+    rawProps: Data | null,
+    rawPrevProps: Data | null,
+    optimized: boolean
+) {
+    // 此时，instance.vnode 已经是更新后的 vnode
+    
+    const {
+        props,
+        attrs,
+        vnode: { patchFlag }
+    } = instance
+    
+    // 获取组件定义的 props
+    const rawOptions = instance.type.props
+    // 获取组件实例的 props，因为组件的 props 会经过依次 shallowReactive 的转换
+    // 所以这里要 toRaw 一次
+    const rawCurrentProps = toRaw(props)
+    // 获取组件的配置对象
+    const { 0: options } = normalizePropsOptions(rawOptions)
+
+    if ((optimized || patchFlag > 0) && !(patchFlag & PatchFlags.FULL_PROPS)) {
+        // 优化更新
+    } else {
+        // 全量更新
+    }
+}
+```  
+
+## 全量更新  
+实现流程：既然是全量更新，那肯定会再次调用 [setFullProps](#setFullProps) 方法来实现，调用之后所有的 `props` 肯定都是新的了，但是有一个问题，就是可能会存在之前旧的 `props` 没有清除，所以接下来主要的步骤就是清除老的 `props`  
+
+```typescript
+// 全量更新 props，这一步会将旧的 props 和新的 props 合并到一起
+setFullProps(instance, rawProps, props, attrs)
+
+let kebabKey: string
+
+// 遍历组件实例的 props，对于存在默认值的 prop 来说会恢复默认值(重置)，不存在就设置为 undefined(移除)
+for (const key in rawCurrentProps) {
+    // 什么时候需要重置和移除？
+    // 1. 不存在新的 props
+    // 2. 存在新的 props
+    //  a. prop 为普通值，例如 name，此时如果在最新的 props 里没有这个值，就会被重置或删除
+    //  b. prop 不是普通值，例如 max-age、maxAge，如果在最新的 props 里都没有 camel-case 和 kabab-case，就会被重置或移除
+    if (
+        !rawProps ||  // 新的 props 不存在
+        // 先检测最新 props 里是否含有 camel-case 的 key
+        (!hasOwn(rawProps, key) &&
+            // 有三种情况 rawProps 里不会存在 key
+            // 1. 当前 key 是旧 props 里的 key，而不是新的里面的  name
+            // 2. 旧的 key 是 camel-case，新的是 kabab-case    maxAge max-age
+            // 3. 当前 key 是一个新的 kabab-case，只不过在这里被转换为 camel-case : max-age
+            // 这个条件满足只能说明这个 key 是一个非 camel-case 的值，例如 name，而非 maxAge
+
+            // 如果没有，则验证这是否是一个普通的 prop，如果是一个普通 prop，则证明这个 prop 是旧的，且不在新的里面
+            // 需要移除或充值
+            ((kebabKey = hyphenate(key)) === key ||
+            
+            // 如果不是一个普通 prop，则再检查是否存在 kabab-case 的 prop
+            // 如果不存在，则说明这个 prop 是旧的，且新的里面没有，需要移除或充值
+            // 如果存在，则说明当前 prop 是一个 kabab-case，而旧的 prop 却是一个 camel-case
+            // 它们两个属于同一个 prop，所以这里也不会对其移除或重置
+            !hasOwn(rawProps, kebabKey)))
+    ) {
+        // 能进入这个 if 里说明当前 key 是旧 props 里的
+        // 需要重置或者移除
+        if (options) {
+            // 组件上声明了需要接受的 props
+            if (rawPrevProps && rawPrevProps[kebabKey!] !== undefined) {
+                // 恢复 props 为默认值，如果没有就是 undefined
+                props[key] = resolvePropValue(
+                    options,
+                    rawProps || EMPTY_OBJ,
+                    key,
+                    undefined
+                )
+            }
+        } else {
+            // 组件上没有声明需要接受的 props，直接将这个 key 移除
+            // 如果是一个没有声明接受 props 的 FC，那么它的 props 和 attrs 指向同一个对象
+            // 在挂载时它接受 props 为 { name: 'IconMan' }，更新变成了 { age: 24 }
+            // 此时会进入 else 删除之前旧的 prop
+            delete props[key]
+        }
+    }
+}
+```
+
+## 优化更新

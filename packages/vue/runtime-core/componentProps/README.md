@@ -13,7 +13,10 @@
     - [2.4. resolvePropValue](#24-resolvepropvalue)
 - [3. 更新 props](#3-更新-props)
     - [全量更新](#全量更新)
+        - [示例一](#示例一)
+        - [示例二](#示例二)
     - [优化更新](#优化更新)
+        - [示例](#示例)
 
 <!-- /TOC -->
 
@@ -22,7 +25,7 @@
 
 实现流程：
 1. 对于每一个组件来说，都可以定义需要接受的 `props`，然后会遍历我们实际传递的 `props`，检测实际传递的是否存在于组件声明中的，如果存在，会放入组件实例的 `props` 中，否则会放入组价实例的 `attrs` 中  
-2. 源码中对每一个属性名都会转驼峰处理，也就是说 `max-age` 和 `maxAge` 是同一个属性，例如下面这个组件  
+2. 源码中对每一个属性名都会转驼峰处理，也就是说 `max-age` 和 `maxAge` 是同一个属性  
 
 接下来看 `initProps` 的具体实现  
  
@@ -72,7 +75,7 @@ export function initProps(
 
 可以看到  
 1. 对于状态组件，它的 `props` 会经过 `shalloReactive` 的转换  
-2. 对于函数组件，如果组件本身没有定义需要接受的 `props`，那么它的 `props` 和 `attrs` 会指向同一对象  
+2. 对于函数组件，如果组件本身没有定义需要接受的 `props`，那么它的 `props` 和 `attrs` 会指向同一对象，就像下面这个组件  
     ```typescript
     const Comp = () => 'Comp';
     ```  
@@ -109,7 +112,7 @@ export function normalizePropsOptions( raw: ComponentPropsOptions | undefined ):
         return EMPTY_ARR as any
     }
 
-    // 在最后会将解析完成的对象挂载在 props 的 _n，如果再次访问的话会直接获取，不会进行第二次的解析
+    // 在最后会将解析完成的对象挂载在 props 的 _n 上，如果再次访问的话会直接获取，不会进行第二次的解析
     // 因为组件的 props 是不会变的，所以只需要解析一次就够了
     if ((raw as any)._n) {
         return (raw as any)._n
@@ -176,6 +179,24 @@ export function normalizePropsOptions( raw: ComponentPropsOptions | undefined ):
     * 可能是 `Boolean` 的情况，因为 `Boolean` 会有额外的处理，后面会看到  
 
 2. 对于上面生成的两个数据中，所有 `prop` 的名称都会被经过驼峰处理，所以存储的都是驼峰形式的属性名  
+
+最终，上面两个示例的 `props` 会被转换为下面这样  
+
+```typescript
+// Comp1
+{
+    name: {},
+    age: {}
+}
+
+// Comp2
+{
+    name: { type: String },
+    age: { type: Number, default: 24 },
+    sex: { type: String },
+    score: { type: [ String, Number ] }
+}
+```
 
 ## 2.2. BooleanFlags  
 这是一个枚举，有两个值，在 [normalizePropsOptions](#normalizePropsOptions)  函数中，会设置给属性的配置对象，在接下来解析的函数 [resolvePropValue](#resolvePropValue) 中会用到  
@@ -379,7 +400,7 @@ function updateProps(
 ```  
 
 ## 全量更新  
-实现流程：既然是全量更新，那肯定会再次调用 [setFullProps](#setFullProps) 方法来实现，调用之后所有的 `props` 肯定都是新的了，但是有一个问题，就是可能会存在之前旧的 `props` 没有清除，所以接下来主要的步骤就是清除老的 `props`  
+实现流程：既然是全量更新，那肯定会再次调用 [setFullProps](#setFullProps) 方法来实现，调用之后，组件实例上的 `props` 和 `attrs` 肯定都是新的了，但是有一个问题，就是可能会存在之前旧的属性没有清除，所以接下来主要的步骤就是清除老的属性  
 
 ```typescript
 // 全量更新 props，这一步会将旧的 props 和新的 props 合并到一起
@@ -395,9 +416,9 @@ for (const key in rawCurrentProps) {
     //  a. prop 为普通值，例如 name，此时如果在最新的 props 里没有这个值，就会被重置或删除
     //  b. prop 不是普通值，例如 max-age、maxAge，如果在最新的 props 里都没有 camel-case 和 kabab-case，就会被重置或移除
     if (
-        !rawProps ||  // 新的 props 不存在
+        !rawProps ||  // 新的 props 不存在  ①
         // 先检测最新 props 里是否含有 camel-case 的 key
-        (!hasOwn(rawProps, key) &&
+        (!hasOwn(rawProps, key) &&         // ②
             // 有三种情况 rawProps 里不会存在 key
             // 1. 当前 key 是旧 props 里的 key，而不是新的里面的  name
             // 2. 旧的 key 是 camel-case，新的是 kabab-case    maxAge max-age
@@ -406,13 +427,13 @@ for (const key in rawCurrentProps) {
 
             // 如果没有，则验证这是否是一个普通的 prop，如果是一个普通 prop，则证明这个 prop 是旧的，且不在新的里面
             // 需要移除或充值
-            ((kebabKey = hyphenate(key)) === key ||
+            ((kebabKey = hyphenate(key)) === key || // ③
             
             // 如果不是一个普通 prop，则再检查是否存在 kabab-case 的 prop
             // 如果不存在，则说明这个 prop 是旧的，且新的里面没有，需要移除或充值
             // 如果存在，则说明当前 prop 是一个 kabab-case，而旧的 prop 却是一个 camel-case
             // 它们两个属于同一个 prop，所以这里也不会对其移除或重置
-            !hasOwn(rawProps, kebabKey)))
+            !hasOwn(rawProps, kebabKey)))   // ④
     ) {
         // 能进入这个 if 里说明当前 key 是旧 props 里的
         // 需要重置或者移除
@@ -436,6 +457,130 @@ for (const key in rawCurrentProps) {
         }
     }
 }
+
+// 处理 attrs
+// 只有没有定义 props 的 FC，它的 props 和 attrs 才指向同一个对象，而它的 props 已经在上面处理过了，所以不需要再对 attrs 处理
+if (attrs !== rawCurrentProps) {
+    // 遍历了所有的 attrs，此时的 attrs 包含的是旧的和新的，在两种情况下会把这个 prop 移除
+    // 1. 没有新的 props 传递，此时会移除所有的 attrs
+    // 2. 有新的 props，但是 attr 不在新的 props 中，说明是旧的
+    // rawProps 是新的所有 props 集合，如果 key 不存在于其中，那么说明这个 key 是旧的，需要移除
+    for (const key in attrs) {
+        if (!rawProps || !hasOwn(rawProps, key)) {
+            delete attrs[key]
+        }
+    }
+}
+
+```  
+
+### 示例一  
+```typescript
+const root = document.querySelector( '#root' );
+const Comp = defineComponent({
+    props: [ 'fooBar' ],
+    render() {
+        return h('div')
+    }
+});
+/**
+ * Comp 的 props 配置对象解析为
+ * {
+ *   fooBar: {}
+ * }
+ */
+
+// 渲染 Comp 组件，并传递两个 props，fooBar 和 bar
+render( h(Comp, { fooBar: 1, bar: 2 }), root )
+// 渲染完成后，Comp 组件实例上的 props 是 { fooBar: 1 }，attrs 是 { bar: 2 }
+
+// 更新 Comp 组件
+// 更新过程中，在 ② 处，最新的 props 里没有 fooBar，在 ③ 处 fooBar 和 foo-bar 不相等，在 ④ 处，最新的 props 里存在 foo-bar
+// 所以这个属性不会被删除或重置
+render( h(Comp, { 'foo-bar': 2, bar: 3, baz: 4 }), root )
+// 更新完成后，Comp 组件实例上的 props 是 { fooBar: 2 }, attrs: { bar: 3, baz: 4 }
+
+// 更新 Comp 组件
+// 更新过程中，在 ② 处，最新的 props 里没有 fooBar，在 ③ 处 fooBar 和 foo-bar 不相等，在 ④ 处，最新的 props 里存在 foo-bar
+// 所以这个属性不会被删除或重置
+render( h(Comp, { 'foo-bar': 3, bar: 3, baz: 4 }), root )
+// 更新完成后，Comp 组件实例上的 props 是 { fooBar: 3 }, attrs: { bar: 3, baz: 4 }
+
+// 更新 Comp 组件
+// 更新过程中，在 ② 处，最新的 props 里没有 fooBar，在 ③ 处 fooBar 和 foo-bar 不相等，在 ④ 处，最新的 props 里也没有 foo-bar
+// 所以这个属性会被重置
+render( h(Comp, { qux: 5 }), root )
+// 更新完成后，Comp 组件实例上的 props 是 { fooBar: undefined }, attrs: { qux: 5 }
 ```
 
-## 优化更新
+### 示例二  
+```typescript
+const root = document.querySelector( '#root' );
+const Comp: FunctionalComponent = ( _props, { attrs: _attrs } ) => {
+    return h('div');
+}
+
+// 挂载 Comp 组件，Comp 组件实例的 props === attrs
+render( h(Comp, { foo: 1 }), root );
+// 挂载完成后，Comp 组件实例的 props/attrs 是 { foo: 1 }
+
+// 更新 Comp 组件
+// 更新过程中，最新的 props 里不存在 foo，所以重置 foo
+render(h(Comp, { bar: 2 }), root)
+// 更新完成后，Comp 组件实例的 props/attrs 是 { foo: undefined, bar: 2 }
+```
+
+## 优化更新  
+只需要更新会变化的 `props`，而会变化的 `props` 是记录在 `vnode` 的 `dynamicProps` 上的，所以只需要遍历 `dynamicProps`，  
+
+```typescript
+if (patchFlag & PatchFlags.PROPS) {
+    // Compiler-generated props & no keys change, just set the updated
+    // the props.
+    const propsToUpdate = instance.vnode.dynamicProps!
+    for (let i = 0; i < propsToUpdate.length; i++) {
+        const key = propsToUpdate[i]
+        // PROPS flag guarantees rawProps to be non-null
+        const value = rawProps![key]
+        if (options) {
+            // attr / props separation was done on init and will be consistent
+            // in this code path, so just check if attrs have it.
+            if (hasOwn(attrs, key)) {
+                attrs[key] = value
+            } else {
+                const camelizedKey = camelize(key)
+                props[camelizedKey] = resolvePropValue(
+                    options,
+                    rawCurrentProps,
+                    camelizedKey,
+                    value
+                )
+            }
+        } else {
+            attrs[key] = value
+        }
+    }
+}
+```  
+
+### 示例  
+```typescript
+const foo = ref(1)
+const id = ref('a')
+
+const Child = defineComponent({
+    props: ['foo'],
+    template: `<div>{{ foo }}</div>`
+});
+
+const Comp = defineComponent({
+    setup() {
+        return {
+            foo,
+            id
+        }
+    },
+    components: { Child },
+    template: `<Child :foo="foo" :id="id"/>`
+});
+```

@@ -5,6 +5,8 @@
 - [provide](#provide)
 - [inject](#inject)
 - [示例](#示例)
+    - [provides 继承流程](#provides-继承流程)
+    - [function component](#function-component)
 
 <!-- /TOC -->
 
@@ -34,7 +36,7 @@ export function createAppContext(): AppContext {
 }
 ```  
 
-可以看到，`context` 里的 `provides` 就是一个普通对象，并且不会继承任何属性。生成 `context` 后，会在调用 `createApp().mount()` 时挂载到根组件的 `vnode` 上  
+可以看到，`context` 里的 `provides` 就是一个普通对象，并且不会继承任何属性。生成 `context` 后，会在调用 `createApp().mount()` 时将其挂载到根组件的 `vnode` 上  
 
 ```typescript
 export function createAppAPI<HostElement>(
@@ -67,14 +69,14 @@ export function createAppAPI<HostElement>(
             },
 
             provide(key, value) {
+                // 验证 key 是否重复
                 if (__DEV__ && (key as string | symbol) in context.provides) {
                     warn(
                         `App already provides property with key "${String(key)}". ` +
                         `It will be overwritten with the new value.`
                     )
                 }
-                // TypeScript doesn't allow symbols as index type
-                // https://github.com/Microsoft/TypeScript/issues/24587
+                // 将提供的 key 和 value 存入 context.provides 中
                 context.provides[key as string] = value
 
                 return app
@@ -86,9 +88,12 @@ export function createAppAPI<HostElement>(
 }
 ```  
 
-这样，每个组件实例的 `context` 来源就有两个，如果是根组件，那么就会取 `vnode` 上的 `appContext`，如果不是根组件，那么就会取父组件的 `appContext`，由此可以看到，在整个应用中，每个组件实例的 `appContext` 其实都指向的是 `app` 里的 `context` 这个对象  
+在创建组件实例时，每个实例的 `context` 来源会有两个
+1. 如果是根组件，那么就会取 `vnode` 上的 `appContext`
+2. 如果不是根组件，那么就会取父组件的 `appContext`  
 
-而对于每个组件的 `provides` 和 `context` 是一模一样的  
+由此可以看到，在整个应用中，每个组件实例的 `appContext` 其实都指向的是 `app` 里的 `context` 这个对象  
+而对于每个组件的 `provides` 也一样，指向 `app.context.provides`，但是如果在组件中使用了 `provide` 函数，那么就会打破这个关系，后面会看到   
 
 ```typescript
 export function createComponentInstance (
@@ -109,10 +114,11 @@ export function createComponentInstance (
 }
 ```  
 
-接下来看 `provide` 函数的实现，该函数只能用在某一个组件的 `setup` 内  
+接下来看 `provide` 函数的实现，该函数只能用在某一个组件的 `setup` 内调用  
 
 ```typescript
 export function provide<T>(key: InjectionKey<T> | string, value: T) {
+    // 检验是否在 setup 函数内
     if (!currentInstance) {
         if (__DEV__) {
             warn(`provide() can only be used inside setup().`)
@@ -142,15 +148,18 @@ export function provide<T>(key: InjectionKey<T> | string, value: T) {
 `provide` 用于提供数据，而 `inject` 用于获取数据，并且还可以提供获取不到时的默认值  
 
 ```typescript
+/**
+ * 获取 provide 提供的数据
+ * @param { InjectionKey<any> | string } key 数据的 key
+ * @param { any } defaultValue key 不存在时的默认值
+ * @param { boolean } treatDefaultAsFactory 是否将默认值是为函数
+ */
 export function inject(
     key: InjectionKey<any> | string,
     defaultValue?: unknown,
     treatDefaultAsFactory = false
 ) {
-    // fallback to `currentRenderingInstance` so that this can be called in
-    // a functional component
-
-    // 获取当前正在渲染的组件
+    // 获取当前正在渲染的组件，当前组件可以是状态组件，也可以是函数组件
     const instance = currentInstance || currentRenderingInstance
 
     if (instance) {
@@ -160,7 +169,8 @@ export function inject(
         // 检测 key 是否存在于 provides，会一直向上检测
         if ((key as string | symbol) in provides) {
             return provides[key as string]
-        } else if (arguments.length > 1) {
+        } else if (arguments.length > 1) {  // 检测是否存在第二个参数
+            // 如果存在，则判断 treatDefaultAsFactory 是否为 true，并且 defaultValue 是函数
             return treatDefaultAsFactory && isFunction(defaultValue)
                 ? defaultValue()
                 : defaultValue
@@ -174,16 +184,27 @@ export function inject(
 ```
 
 # 示例  
+## provides 继承流程  
+
 ```typescript
-const Provider = {
-    render() {
-        return h(Middle)
+const Root = {
+    render () {
+        return h( ProviderOne )
     }
 }
 
-const Middle = {
-    setup () {
-        provide( 'foo', 'foo' )
+const ProviderOne = {
+    setup() {
+        provide('foo', 'foo')
+        provide('bar', 'bar')
+        return () => h(ProviderTwo)
+    }
+}
+
+const ProviderTwo = {
+    setup() {
+        provide('foo', 'fooOverride')
+        provide('baz', 'baz')
         return () => h(Consumer)
     }
 }
@@ -191,19 +212,65 @@ const Middle = {
 const Consumer = {
     setup() {
         const foo = inject('foo')
-        const rootValue = inject('rootValue')
-        return () => foo + ' - ' + rootValue
+        const bar = inject('bar')
+        const baz = inject('baz')
+        const root = inject('root')
+        return () => [foo, bar, baz, root].join(',')
     }
 }
 
-const app = createApp( Provider )
+const app = createApp( Root )
 
-app.provide( 'rootValue', 'rootValue' );
+app.provide( 'root', 'root' );
 
 app.mount( document.querySelector( '#root' ) )
 ```  
 
-1. 首先通过 `createApp` 生成 `app.context`，并且通过 `app.provide` 向 `app.context.provides` 增加 `rootValue` 数据
-2. 生成 `Provider` 组件的实例时，它没有父组件，所以它的 `provides` 仅仅是一个继承 `app.context.provides` 的新对象  
-3. 生成 `Middle` 组件实例时，所以它的 `provides` 和父组件 `Provider` 指向同一个 `provides`，再到 `setup` 中执行 `provide` 时，由于它和父组件指向同一个 `provides`，所以会为 `Middle` 组件实例生成一个新的对象，并且继承 `Provider.provides`，再将 `foo` 添加到 `Middle.provides` 中  
-4. 生成 `Consumer` 组件实例时，所以它的 `provides` 和父组件 `Middle` 指向同一个 `provides`，通过自身的 `provides` 
+1. 首先通过 `createApp` 生成 `app.context`，并且通过 `app.provide` 向 `app.context.provides` 增加 `root` 数据  
+
+    <img src="./example-01.jpg" width="600" />
+
+2. 生成 `Root` 组件的实例时，它没有父组件，所以它的 `provides` 仅仅是一个继承 `app.context.provides` 的新对象  
+
+    <img src="./example-02.jpg" width="600" />
+
+3. 生成 `ProviderOne` 组件的实例时，由于存在父组件，所以它的 `provides` 和父组件指向同一个对象  
+
+    <img src="./example-03.jpg" width="600" />  
+
+    到执行 `setup` 中的 `provide` 时，由于父组件和当前组件的 `provides` 指向同一对象，所以会重写当前组件的 `provides`  
+
+    <img src="./example-04.jpg" width="600" />
+
+4. 生成 `ProviderTwo` 和 `ProviderOne` 的过程一模一样  
+
+    <img src="./example-05.jpg" width="600" />  
+
+5. 最后生成 `Comsumer` 组件，它的 `provides` 和父组件指向同一个  
+
+    <img src="./example-06.jpg" width="600" />  
+
+    现在，通过 `inject`，可以在这条链路上依次找到 `foo`、`bar`、`baz` 和 `root`，且先找到先使用，所以最终的结果就是 `fooOverride,bar,baz,root`  
+
+## function component  
+在函数组件中使用 `inject`，也是可以获取到数据的  
+
+```typescript
+const Provider = {
+    setup () {
+        provide( 'foo', 'foo1' );
+        return () => h( Consumer )
+    }
+}
+
+const Consumer = () => {
+    const foo = inject( 'foo' );
+    return foo;
+}
+
+const app = createApp( Provider )
+
+app.mount( document.querySelector( '#app' ) )
+```  
+
+最终渲染出来的就是 `foo1`

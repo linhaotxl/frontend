@@ -4,7 +4,6 @@
 
 - [AccessTypes](#accesstypes)
 - [accessCache](#accesscache)
-- [proxy](#proxy)
 - [PublicInstanceProxyHandlers](#publicinstanceproxyhandlers)
     - [publicPropertiesMap](#publicpropertiesmap)
     - [get](#get)
@@ -12,6 +11,9 @@
     - [has](#has)
 - [示例](#示例)
     - [getter 和 setter](#getter-和-setter)
+- [RuntimeCompiledPublicInstanceProxyHandlers](#runtimecompiledpublicinstanceproxyhandlers)
+    - [get](#get-1)
+    - [has](#has-1)
 
 <!-- /TOC -->
 
@@ -31,8 +33,9 @@ const enum AccessTypes {
 # accessCache  
 在每个组件实例上存在 `accessCache` 这个属性，它的类型是 `Record<string, AccessTypes>` 这样的对象，保存的 `key` 是具体访问的属性名，而 `value` 是这个属性的来源，当访问一个属性时，会先从 `accessCache` 中查找是否记录了来源，如果有，则直接从指定的来源中获取数据，如果没有，则依次从不同的来源中查找  
 
-# proxy  
-在组件实例上存在属性 `ctx`，其中存在 `_` 属性执行自身实例  
+# PublicInstanceProxyHandlers  
+
+在组件实例上存在属性 `ctx`，其中存在 `_` 属性，并指向自身实例  
 
 ```typescript
 export function createComponentInstance (
@@ -65,9 +68,7 @@ function setupStatefulComponent(
 }
 ```
 
-这个 `proxy` 对象主要用于组件的 `render` 方法中  
-
-# PublicInstanceProxyHandlers  
+这个 `proxy` 对象主要用于组件的 `render` 方法中，可以通过 `this` 来获取到其中的属性  
 
 ## publicPropertiesMap  
 
@@ -269,7 +270,28 @@ set( { _: instance }: ComponentRenderContext, key: string, value: any ): boolean
 ## has  
 
 ```typescript
-
+/**
+ * 检测 key 是否存在于 ctx 中 
+ */
+has({ _: { data, setupState, accessCache, ctx, appContext, propsOptions } }: ComponentRenderContext, key: string ) {
+    let normalizedProps
+    return (
+        // 检测是否之前已经访问过这个 key
+        accessCache![key] !== undefined ||
+        // 检测 data 中是否存在 key
+        (data !== EMPTY_OBJ && hasOwn(data, key)) ||
+        // 检测 setupState 中是否存在 key
+        (setupState !== EMPTY_OBJ && hasOwn(setupState, key)) ||
+        // 获取组件 props 的配置对象集合，并检测 key 是否存在于其中
+        ((normalizedProps = propsOptions[0]) && hasOwn(normalizedProps, key)) ||
+        // 检测是否存在于 ctx 中
+        hasOwn(ctx, key) ||
+        // 检测是否存在于 publicPropertiesMap
+        hasOwn(publicPropertiesMap, key) ||
+        // 检测是否在全局属性中
+        hasOwn(appContext.config.globalProperties, key)
+    )
+}
 ```  
 
 # 示例  
@@ -330,4 +352,132 @@ console.log( instanceProxy.$attrs );    // { score: 90 }
 
 // global
 console.log( instanceProxy.global )     // global value
+```  
+
+```typescript
+'age' in instanceProxy;     // true
+'name' in instanceProxy;    // true
+'$store' in instanceProxy;  // true
+'$attrs' in instanceProxy;  // true
+'global' in instanceProxy;  // true
+```
+
+# RuntimeCompiledPublicInstanceProxyHandlers  
+通过 `template` 生成的 `render` 方法时，组件上会存在 `withProxy` 属性，它是对 `ctx` 的代理  
+
+```typescript
+function finishComponentSetup(
+    instance: ComponentInternalInstance,
+    isSSR: boolean
+) {
+    /* ... */
+    // 有 template 生成的 render 方法上都会存在 _rc 属性
+    if (instance.render._rc) {
+        instance.withProxy = new Proxy(
+            instance.ctx,
+            RuntimeCompiledPublicInstanceProxyHandlers
+        )
+    }
+    /* ... */
+}
+```  
+
+`RuntimeCompiledPublicInstanceProxyHandlers` 是基于 `PublicInstanceProxyHandlers` 的，只不过重写了 `get` 和 `has` 放方法，剩下的都一样  
+
+```typescript
+export const RuntimeCompiledPublicInstanceProxyHandlers = extend(
+    {},
+    PublicInstanceProxyHandlers,
+    {
+        get(target: ComponentRenderContext, key: string) {
+            // ...
+        },
+        has(_: ComponentRenderContext, key: string) {
+            // ...
+        }
+    }
+)
+```
+
+## get  
+
+在这之前首先要了解 `Symbol.unscopables` 的作用  
+可以为任何对象定义 `Symbol.unscopables` 属性，并且它的值是一个对象，里面包含的是这个对象中的属性是否需要排除 `with` 环境  
+
+```typescript
+const obj = { 
+    foo: 1, 
+    bar: 2 
+};
+obj[Symbol.unscopables] = { 
+    foo: false, // foo 属性需要在 with 环境中
+    bar: true   // bar 属性不需要再 with 环境中
+};
+with( obj ) {
+    console.log(foo); // 1，相当于 obj.foo
+    console.log(bar); // ReferenceError: bar is not defined，相当于 bar
+}
+```  
+
+可以看到，访问 `bar` 的时候，不再会从 `with` 的环境 `obj` 中去查找，所以会直接报错  
+更改这个示例，加上代理对象  
+
+```typescript
+const obj = { 
+    foo: 1, 
+    bar: 2 
+};
+
+obj[Symbol.unscopables] = { 
+    foo: false, // foo 属性需要在 with 环境中
+    bar: true   // bar 属性不需要再 with 环境中
+};
+
+const proxy = new Proxy( obj, {
+    get ( target, key, reciver ) {
+        console.log( 'key is -> ', key )
+        return Reflect.get( target, key, reciver )
+    }
+})
+
+with( proxy ) {
+    console.log(foo); // 1，相当于 obj.foo
+    console.log(bar); // ReferenceError: bar is not defined，相当于 bar
+}
+
+// 输出
+// key is ->  Symbol(Symbol.unscopables)
+// key is ->  foo
+// key is ->  Symbol(Symbol.unscopables)
+```  
+
+可以看出，在 `with` 语句中访问属性时，首先会查找环境的 `Symbol.unscopables` 对象，来判断访问的属性是否排除了 `with` 语句，如果没排除，则再一次访问确定的属性，如果排除了，就不会再访问了  
+
+所以在 `RuntimeCompiledPublicInstanceProxyHandlers.get` 中，如果当前访问的是 `Symbol.unscopables` 就会直接过滤掉，什么也不做，如果访问的属性没有被排除，那么会再次触发 `get`，而这一次会通过 `PublicInstanceProxyHandlers.get` 来获取到最终的值  
+
+```typescript
+get( target: ComponentRenderContext, key: string ) {
+    // fast path for unscopables when using `with` block
+    if ((key as any) === Symbol.unscopables) {
+        return
+    }
+    return PublicInstanceProxyHandlers.get!(target, key, target)
+}
+```  
+
+## has   
+因为在 `template` 中，是不会存在  
+
+```typescript
+has( _: ComponentRenderContext, key: string ) {
+    const has = key[0] !== '_' && !isGloballyWhitelisted(key)
+    if (__DEV__ && !has && PublicInstanceProxyHandlers.has!(_, key)) {
+        warn(
+            `Property ${JSON.stringify(
+            key
+            )} should not start with _ which is a reserved prefix for Vue internals.`
+        )
+    }
+    return has
+}
 ```

@@ -466,7 +466,24 @@ get( target: ComponentRenderContext, key: string ) {
 ```  
 
 ## has   
-因为在 `template` 中，是不会存在  
+因为在 `template` 中，只会存在一种情况会被 `has` 拦截，下面这是一个由 `<div>{{ String('Hello World!') }}</div>` 生成的 `render` 函数  
+
+```typescript
+const _Vue = Vue
+
+return function render(_ctx, _cache, $props, $setup, $data, $options) {
+    with (_ctx) {
+        const { toDisplayString: _toDisplayString, createVNode: _createVNode, openBlock: _openBlock, createBlock: _createBlock } = _Vue
+
+        return (_openBlock(), _createBlock("div", null, _toDisplayString(String('Hello World!')), 1 /* TEXT */))
+    }
+}
+```  
+
+当访问 `_Vue` 或者 `String` 的时候，因为当前在 `with` 的环境中，所以会先去查找是否存在于 `_ctx`，就会被 `has` 拦截  
+只有两种情况会被认为不在 `_ctx` 的作用域中  
+1. 内置变量，以 `_` 开头  
+2. `JS` 的内置对象，`String`、`Number` 等  
 
 ```typescript
 has( _: ComponentRenderContext, key: string ) {
@@ -474,10 +491,12 @@ has( _: ComponentRenderContext, key: string ) {
     if (__DEV__ && !has && PublicInstanceProxyHandlers.has!(_, key)) {
         warn(
             `Property ${JSON.stringify(
-            key
+                key
             )} should not start with _ which is a reserved prefix for Vue internals.`
         )
     }
     return has
 }
-```
+```  
+
+[isGloballyWhitelisted](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#isGloballyWhitelisted) 是全局变量的白名单集合，通过它来检测是否是全局对象  

@@ -22,7 +22,7 @@
 
 <!-- TODO: -->
 # emit 函数生成  
-在每个组件的 `setup` 方法中，可以从第二个参数 `setupContext` 里面可以获取到这个 `emit` 方法，在调用 `setup` 方法之前，会先生成 `setupContext` 对象     
+在每个组件的 `setup` 方法中，可以从第二个参数 `setupContext` 里面可以获取到 `emit` 方法，在调用 `setup` 方法之前，会先生成 `setupContext` 对象     
 
 ```typescript
 /**
@@ -40,7 +40,7 @@ function createSetupContext ( instance: ComponentInternalInstance ): SetupContex
 
 之后就可以在 `setup` 中触发自定义事件了   
 
-可以看到，`emit` 函数来自于组件实例上，而它的创建是发生在创建实例的过程 [createComponentInstance](#createComponentInstance) 中  
+可以看到，`emit` 函数来自于组件实例上，而它的生成是发生在创建实例的过程 [createComponentInstance](#createComponentInstance) 中  
 
 ```typescript
 export function createComponentInstance(
@@ -60,7 +60,7 @@ export function createComponentInstance(
 ```
 
 # normalizeEmitsOptions  
-在组件上可以增加 `emits` 选项，可以对事件函数的参数进行校验，校验成功则执行具体的函数，否则就不会执行  
+在组件上可以增加 `emits` 选项，可以对事件函数的存在以及参数进行校验，校验成功则执行具体的函数，否则就不会执行  
 
 ```typescript
 // array
@@ -77,7 +77,25 @@ const Copm2 = defineComponent({
 });
 ```  
 
-可以看到，`emits` 的格式有多种，所以会先对其进行统一处理，所以通过这个函数需要处理生成配置对象，这个过程在创建组件实例的时候生成，并挂载到组件实例的 `emitsOptions` 属性上  
+可以看到，`emits` 的格式有多种，所以会先对其进行统一处理，通过这个函数生成统一的配置对象，这个过程发生在创建组件实例时，并挂载到组件实例的 `emitsOptions` 属性上    
+
+```typescript
+export function createComponentInstance(
+    vnode: VNode,
+    parent: ComponentInternalInstance | null,
+    suspense: SuspenseBoundary | null
+) {
+    const type = vnode.type as ConcreteComponent
+    /* ... */
+    const instance: ComponentInternalInstance = {
+        /* ... */
+        emitsOptions: normalizeEmitsOptions( type, appContext ),
+        /* ... */
+    }
+    /* ... */
+}
+```
+
 在配置对象中，每个 `emit` 的值可以有两个类型  
 1. `null`: 仅需验证是否监听了这个事件
 2. `function`: 调用函数来验证事件函数的参数是否满足条件  

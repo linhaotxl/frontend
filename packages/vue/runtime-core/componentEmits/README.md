@@ -1,7 +1,8 @@
-**为了更加清楚理解源码的意义，代码的顺序做了调整**  
+> 为了更加清楚理解源码的意义，代码的顺序做了调整  
 
 <!-- TOC -->
 
+- [源码中用到的工具函数](#源码中用到的工具函数)
 - [emit 函数生成](#emit-函数生成)
 - [normalizeEmitsOptions](#normalizeemitsoptions)
 - [emit](#emit)
@@ -14,27 +15,14 @@
 
 <!-- /TOC -->
 
-# emit 函数生成
-在每个组件的实例上，都会绑定一个 `emit` 方法，并且第一个参数就是当前组件实例，这个过程发生在创建实例的过程 [createComponentInstance](#createComponentInstance) 中  
+# 源码中用到的工具函数  
+1. [extend](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#extend)  
+2. [capitalize](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#capitalize)
+3. [hyphenate](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#hyphenate)  
 
-```typescript
-export function createComponentInstance(
-    vnode: VNode,
-    parent: ComponentInternalInstance | null,
-    suspense: SuspenseBoundary | null
-) {
-    // ...
-    // 创建组件实例
-    const instance: ComponentInternalInstance = { // ... };
-
-    // ...
-
-    // 挂载 emit 方法
-    instance.emit = emit.bind( null, instance )
-}
-```  
-
-然后在每个组件的 `setup` 方法中，可以从第二个参数 `setupContext` 里面可以获取到这个 `emit` 方法，在调用 `setup` 方法之前，会先生成 `setupContext` 对象     
+<!-- TODO: -->
+# emit 函数生成  
+在每个组件的 `setup` 方法中，可以从第二个参数 `setupContext` 里面可以获取到这个 `emit` 方法，在调用 `setup` 方法之前，会先生成 `setupContext` 对象     
 
 ```typescript
 /**
@@ -52,18 +40,36 @@ function createSetupContext ( instance: ComponentInternalInstance ): SetupContex
 
 之后就可以在 `setup` 中触发自定义事件了   
 
+可以看到，`emit` 函数来自于组件实例上，而它的创建是发生在创建实例的过程 [createComponentInstance](#createComponentInstance) 中  
+
+```typescript
+export function createComponentInstance(
+    vnode: VNode,
+    parent: ComponentInternalInstance | null,
+    suspense: SuspenseBoundary | null
+) {
+    // ...
+    // 创建组件实例
+    const instance: ComponentInternalInstance = { // ... };
+
+    // ...
+
+    // 挂载 emit 方法
+    instance.emit = emit.bind( null, instance )
+}
+```
+
 # normalizeEmitsOptions  
-在触发事件后到执行具体的事件函数这个区间内，可以对事件函数的参数进行校验，校验成功则执行具体的函数，否则就不会执行  
-在组件里可以声明 `emits` 来标识需要校验的事件，而 `emits` 的格式有多种，所以会先对其进行统一处理  
+在组件上可以增加 `emits` 选项，可以对事件函数的参数进行校验，校验成功则执行具体的函数，否则就不会执行  
 
 ```typescript
 // array
-defineComponent({
+const Comp1 = defineComponent({
     emits: [ 'foo' ]
 });
 
 // object
-defineComponent({
+const Copm2 = defineComponent({
     emits: {
         foo: null,
         bar: arg => arg > 0
@@ -71,11 +77,14 @@ defineComponent({
 });
 ```  
 
-`emits` 的配置对象会在创建组件实例的时候生成，并挂载到组件实例的 `emitsOptions` 属性上  
+可以看到，`emits` 的格式有多种，所以会先对其进行统一处理，所以通过这个函数需要处理生成配置对象，这个过程在创建组件实例的时候生成，并挂载到组件实例的 `emitsOptions` 属性上  
+在配置对象中，每个 `emit` 的值可以有两个类型  
+1. `null`: 仅需验证是否监听了这个事件
+2. `function`: 调用函数来验证事件函数的参数是否满足条件  
 
 ```typescript
 /**
- * @param { ConcreteComponent } 组件
+ * @param { ConcreteComponent } 组件对象
  */
 export function normalizeEmitsOptions(
     comp: ConcreteComponent,
@@ -119,9 +128,8 @@ export function normalizeEmitsOptions(
 }
 ```  
 
-在配置对象中，如果值为 `null` 的 `emit` 代表只需要校验是否监听了这个事件，如果为函数的话，不仅会验证是否监听，还会验证事件函数的参数是否满足指定要求  
-
 # emit  
+触发自定义事件  
 
 ```typescript
 /**
@@ -206,6 +214,8 @@ export function emit(
 }
 ```  
 
+可以看到通过 `emit` 触发的事件，需要监听的事件名应该是 **on + 事件首字母大写**，
+
 # 示例  
 
 ## 处理基本事件函数  
@@ -234,8 +244,8 @@ render(h(Comp), root)
 // onBar
 // onBaz
 ```  
-通过 `emit` 触发的事件，会拼接 `on` + 首字母大写的事件名为实际出发的事件名，再匹配 `props` 中是否存在这个属性，存在的话才会触发具体的函数  
-所以只有 `bar` 和 `!baz` 这两个才会触发  
+
+实际出发的事件分别是 `onFoo`、`onBar` 和 `on!baz`，所以只会匹配到两个  
 
 ## 处理 once 事件  
 ```typescript
@@ -267,10 +277,11 @@ render(
 // name
 // name
 ```  
-在第一次触发事件 `age` 时，会将 `emitted` 设置为 `{ onAge: true }`，而当第二次触发 `age` 时，`emitted` 中的 `onAge` 已经为 `true` 所以会直接退出  
-而在触发 `name` 时，`emitted` 中的 `onName` 为 `false`，所以 `name` 事件会只触发一次  
 
-**因为代码中只标注了第一次触发的 once 事件，所以只有第一个 once 事件是有效的，再之后的都会失去 once 这个特性**  
+在第一次触发事件 `age` 时，会将 `emitted` 设置为 `{ onAge: true }`，而当第二次触发 `age` 时，`emitted` 中的 `onAge` 已经为 `true` 所以会直接退出  
+而在触发 `name` 时，`emitted` 已经是有效值了，且不存在 `onName` 属性，所以 `name` 事件可以一直被触发 
+
+**因为源码中只标注了第一次触发的 once 事件，所以只有第一个 once 事件是有效的，再之后触发的事件都会失去 once 这个特性**  
 
 ## 触发不存在的事件  
 ```typescript
@@ -327,7 +338,10 @@ render(h(Foo), root)
 const Comp = defineComponent({
     setup ( _, { emit } ) {
         onMounted(() => {
+            // 触发一
             emit( 'update:lastName' );
+            // 触发二
+            emit( 'update:last-name' );
         });
     },
 
@@ -335,9 +349,29 @@ const Comp = defineComponent({
 });
 const update = () => { console.log( 'update' ) }
 
-render( h( Comp, { 'onUpdate:last-name': update } ), root )
+// 渲染一
+render( h( Comp, { 'onUpdate:last-name': update } ), root );    // <Comp v-model:last-name />
+
+// 渲染二
+render( h( Comp, { 'onUpdate:lastName': update } ), root );     // <Comp v-model:lastName />
 ```  
 
-上面中是 `Comp` 实现了 `v-model:last-name` 这种情况，如果触发的是 `update:last-name` 事件是肯定不会有问题的，但现在却触发了 `update:lastName` 事件，所以在 `emit` 内部对这种情况做了一个处理，会将触发的事件名转换为 **kabeb-case** 的形式，从而能正确匹配到对应的事件  
+这里有四种组合，一个一个来看  
+
+1. 渲染一 + 触发一  
+现在触发的事件名( `onUpdate:lastName` )不会在 `props` 中找到，而且事件名又是 `update:` 开头，所以会进入处理 `v-model` 的 `if` 中处理  
+首先将事件名转换为 kabab-case，即 ( `update:last-name` ) 再将首字母换大写并拼接 `on`，即 ( `onUpdate:last-name` )，这样就能在 `props` 中直接找到了，从而触发事件函数  
+
+    **v-model:xxx 的是一个 kabab-case，而 emit 的是一个 camel-case 的事件，就会进行特殊处理，从而能匹配到正确的事件**  
+
+2. 渲染一 + 触发二 和 渲染二 + 触发一  
+这两种方式可以直接从 `props` 找到事件，并触发  
+
+3. 渲染二 + 触发二  
+这种触发的事件不管怎么样都无法从 `props` 中找到，所以不会触发  
+
+**总结**  
+1. 监听的事件名是 camel-case，而触发是却是 kabab-case，这种是无法匹配到的（ 渲染二 + 触发二 ）  
+2. 监听的事件名是 kabab-case，而触发的却是 camel-case，这种是可以匹配到的（ 渲染一 + 触发一 ）  
 
 **官方建议始终使用 kabak-case 的事件名**

@@ -1,21 +1,25 @@
-**为了更加清楚理解源码的意义，代码的顺序做了调整**  
+> 为了更加清楚理解源码的意义，代码的顺序做了调整  
 
 <!-- TOC -->
 
+- [源码中用到的工具函数](#源码中用到的工具函数)
 - [AccessTypes](#accesstypes)
 - [accessCache](#accesscache)
 - [PublicInstanceProxyHandlers](#publicinstanceproxyhandlers)
     - [publicPropertiesMap](#publicpropertiesmap)
-    - [get](#get)
-    - [set](#set)
-    - [has](#has)
+    - [PublicInstanceProxyHandlers.get](#publicinstanceproxyhandlersget)
+    - [PublicInstanceProxyHandlers.set](#publicinstanceproxyhandlersset)
+    - [PublicInstanceProxyHandlers.has](#publicinstanceproxyhandlershas)
 - [示例](#示例)
     - [getter 和 setter](#getter-和-setter)
 - [RuntimeCompiledPublicInstanceProxyHandlers](#runtimecompiledpublicinstanceproxyhandlers)
-    - [get](#get-1)
-    - [has](#has-1)
+    - [RuntimeCompiledPublicInstanceProxyHandlers.get](#runtimecompiledpublicinstanceproxyhandlersget)
+    - [RuntimeCompiledPublicInstanceProxyHandlers.has](#runtimecompiledpublicinstanceproxyhandlershas)
 
 <!-- /TOC -->
+
+# 源码中用到的工具函数  
+1. [isGloballyWhitelisted](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#isGloballyWhitelisted)  
 
 # AccessTypes  
 当在组件的 `template` 或者 `render` 里使用某个属性时，会标记这个属性的来源，是来自于 `setupState` 还是 `props` 等，在源码中使用 `AccessTypes` 来标记不同的来源  
@@ -71,6 +75,7 @@ function setupStatefulComponent(
 这个 `proxy` 对象主要用于组件的 `render` 方法中，可以通过 `this` 来获取到其中的属性  
 
 ## publicPropertiesMap  
+这是内置属性的集合，当访问的是一个内置属性时，实际访问的就是下面集合中的对应值  
 
 ```typescript
 const publicPropertiesMap: PublicPropertiesMap = extend(Object.create(null), {
@@ -91,7 +96,9 @@ const publicPropertiesMap: PublicPropertiesMap = extend(Object.create(null), {
 } as PublicPropertiesMap)
 ```
 
-## get  
+## PublicInstanceProxyHandlers.get  
+
+在 `render` 中通过 `this` 访问某个属性时，会被 `get` 拦截，从而确定属性具体的来源  
 
 ```typescript
 get({ _: instance }: ComponentRenderContext, key: string) {
@@ -158,11 +165,11 @@ get({ _: instance }: ComponentRenderContext, key: string) {
     // 2. 非内置属性，例如 $store
     // 3. 存在于全局的 globalProperties 中的属性，此时在上面几种情况都无法找到，所以会运行到这里继续查找
 
-    // 内置属性获取的 getter 方法
+    // 获取内置属性，从内置集合中
     const publicGetter = publicPropertiesMap[key]
     let cssModule, globalProperties
 
-    // 如果 getter 存在，则直接调用并获取
+    // 如果内置属性存在，则直接调用并获取
     if (publicGetter) {
         if (key === '$attrs') {
             // TODO: 为什么需要 track
@@ -170,6 +177,7 @@ get({ _: instance }: ComponentRenderContext, key: string) {
         }
         return publicGetter(instance)
     } else if (
+        // TODO:
         // css module (injected by vue-loader)
         (cssModule = type.__cssModules) &&
         (cssModule = cssModule[key])
@@ -216,11 +224,11 @@ get({ _: instance }: ComponentRenderContext, key: string) {
 }
 ```
 
-## set  
+## PublicInstanceProxyHandlers.set  
 
 ```typescript
 /**
- * 为 proxy 设置值
+ * 设置 ctx 中的 setter 拦截
  * @param { ComponentRenderContext } 组件的 ctx 对象
  * @param { string } key 设置的 key
  * @param { any } value 设置的 value
@@ -232,12 +240,11 @@ set( { _: instance }: ComponentRenderContext, key: string, value: any ): boolean
     if (setupState !== EMPTY_OBJ && hasOwn(setupState, key)) {
         setupState[key] = value
     }
-    // 检测是否存在 data key，如果存在，那么会更新 data 中的值
+    // 检测是否存在 data，并且是否含有设置的 key，如果存在，那么会更新 data 中的值
     else if (data !== EMPTY_OBJ && hasOwn(data, key)) {
         data[key] = value
     }
     // 检测 key 是否存在于 props 中，如果存在则抛出警告，因为不能修改 props 中的数据
-    // 如果是 状态 组件，那么 instance.props 是一个 shallowReactive 的对象
     else if (key in instance.props) {
         __DEV__ &&
         warn(
@@ -267,7 +274,7 @@ set( { _: instance }: ComponentRenderContext, key: string, value: any ): boolean
 
 在最后可以看到，只要设置的是有效值（不管是在 `setupState` 还是 `data` 中，或者这两者都不是），最终都会挂载到 `ctx` 上面  
 
-## has  
+## PublicInstanceProxyHandlers.has  
 
 ```typescript
 /**
@@ -319,6 +326,14 @@ app.config.globalProperties.global = 'global value';
 app.mount( root );
 ```  
 
+```typescript
+// setup state
+console.log( instanceProxy.name )   // IconMan
+
+// props
+console.log( instanceProxy.age );   // 24
+```  
+
 现在通过 `instanceProxy` 访问 `name` 和 `age`，会进入 `PublicInstanceProxyHandlers.get` 分别从 `setupState` 和 `props` 中获取，此时组件的 `accessCache` 会成为这样  
 
 ```typescript
@@ -326,12 +341,17 @@ accessCache: {
     name: 0,    // setup state
     age: 2,     // props
 }
-```
+```  
 
-接着访问 `$store`，这是一个自定义且以 $ 开头的属性，只会从 `ctx` 和 `global` 两个对象里取找，但是什么也找不到，所以这里什么也不做，接着进行设置操作  
+```typescript
+console.log( instanceProxy.$store );    // undefined
+```  
+
+接着访问 `$store`，这是一个自定义且以 $ 开头的属性，只会从 `ctx` 和 `global` 两个对象里查找，但是什么也找不到，所以这里什么也不做，接着进行设置操作  
 
 ```typescript
 instanceProxy.$store = { value: 1 };
+console.log( instanceProxy.$store );    // { value: 1 }
 ```  
 
 现在，会将 `$store` 直接挂载在 `ctx` 上，所以再一次访问时，就可以从 `ctx` 中读取到了，现在 `accessCache` 会是这样  
@@ -344,7 +364,7 @@ accessCache: {
 }
 ```  
 
-最后再访问两个属性，`$attrs` 和 `global`，一个会从 `publicPropertiesMap` 获取，一个会从 `appContext.config.globalProperties` 中获取  
+最后再访问两个属性，`$attrs` 和 `global`，前者从 `publicPropertiesMap` 获取，后者从 `appContext.config.globalProperties` 中获取  
 
 ```typescript
 // public
@@ -363,7 +383,7 @@ console.log( instanceProxy.global )     // global value
 ```
 
 # RuntimeCompiledPublicInstanceProxyHandlers  
-通过 `template` 生成的 `render` 方法时，组件上会存在 `withProxy` 属性，它是对 `ctx` 的代理  
+通过 `template` 生成的 `render` 方法，组件上会存在 `withProxy` 属性，它也是对 `ctx` 的代理，只不过拦截对象不同  
 
 ```typescript
 function finishComponentSetup(
@@ -371,7 +391,7 @@ function finishComponentSetup(
     isSSR: boolean
 ) {
     /* ... */
-    // 有 template 生成的 render 方法上都会存在 _rc 属性
+    // 通过 template 生成的 render 方法上都会存在 _rc 属性
     if (instance.render._rc) {
         instance.withProxy = new Proxy(
             instance.ctx,
@@ -399,20 +419,22 @@ export const RuntimeCompiledPublicInstanceProxyHandlers = extend(
 )
 ```
 
-## get  
+## RuntimeCompiledPublicInstanceProxyHandlers.get  
 
 在这之前首先要了解 `Symbol.unscopables` 的作用  
-可以为任何对象定义 `Symbol.unscopables` 属性，并且它的值是一个对象，里面包含的是这个对象中的属性是否需要排除 `with` 环境  
+可以为任何对象定义 `Symbol.unscopables` 属性，它的值是一个对象，里面包含的是每个属性是否需要排除 `with` 环境  
 
 ```typescript
 const obj = { 
     foo: 1, 
     bar: 2 
 };
+
 obj[Symbol.unscopables] = { 
     foo: false, // foo 属性需要在 with 环境中
     bar: true   // bar 属性不需要再 with 环境中
 };
+
 with( obj ) {
     console.log(foo); // 1，相当于 obj.foo
     console.log(bar); // ReferenceError: bar is not defined，相当于 bar
@@ -453,7 +475,7 @@ with( proxy ) {
 
 可以看出，在 `with` 语句中访问属性时，首先会查找环境的 `Symbol.unscopables` 对象，来判断访问的属性是否排除了 `with` 语句，如果没排除，则再一次访问确定的属性，如果排除了，就不会再访问了  
 
-所以在 `RuntimeCompiledPublicInstanceProxyHandlers.get` 中，如果当前访问的是 `Symbol.unscopables` 就会直接过滤掉，什么也不做，如果访问的属性没有被排除，那么会再次触发 `get`，而这一次会通过 `PublicInstanceProxyHandlers.get` 来获取到最终的值  
+所以在 `RuntimeCompiledPublicInstanceProxyHandlers.get` 中，如果当前访问的是 `Symbol.unscopables` 就会直接过滤掉，什么也不做，如果访问的属性没有被排除，那么会再次触发 `get`，而这一次会通过 [PublicInstanceProxyHandlers.get](#PublicInstanceProxyHandlers.get) 来获取到最终的值，和之前的逻辑一样  
 
 ```typescript
 get( target: ComponentRenderContext, key: string ) {
@@ -465,8 +487,8 @@ get( target: ComponentRenderContext, key: string ) {
 }
 ```  
 
-## has   
-因为在 `template` 中，只会存在一种情况会被 `has` 拦截，下面这是一个由 `<div>{{ String('Hello World!') }}</div>` 生成的 `render` 函数  
+## RuntimeCompiledPublicInstanceProxyHandlers.has   
+在 `template` 生成的 `render` 中，只会存在一种情况会被 `has` 拦截，下面这是一个由 `<div>{{ String('Hello World!') }}</div>` 生成的 `render` 函数  
 
 ```typescript
 const _Vue = Vue
@@ -480,7 +502,7 @@ return function render(_ctx, _cache, $props, $setup, $data, $options) {
 }
 ```  
 
-当访问 `_Vue` 或者 `String` 的时候，因为当前在 `with` 的环境中，所以会先去查找是否存在于 `_ctx`，就会被 `has` 拦截  
+当访问 `_Vue` 和 `String` 的时候，因为当前在 `with` 的环境中，所以会先去查找是否存在于 `_ctx`，就会被 `has` 拦截  
 只有两种情况会被认为不在 `_ctx` 的作用域中  
 1. 内置变量，以 `_` 开头  
 2. `JS` 的内置对象，`String`、`Number` 等  

@@ -15,6 +15,8 @@
     - [getTypeIndex](#gettypeindex)
     - [isSameType](#issametype)
     - [getType](#gettype)
+- [示例](#示例)
+    - [Boolean转换](#boolean转换)
 
 <!-- /TOC -->
 
@@ -313,27 +315,8 @@ function setFullProps(
 ## resolvePropValue  
 这个方法主要处理需要转换的 `prop`，并返回转换后的值，主要有两种情况会转换  
 1. 存在默认值 `default`  
-2. 存在 `Boolean` 类型的属性
-
-    如果一个属性定义的类型是 `Boolean` 但是实际传入的却不是 `Boolean`，此时就会对其进行转化处理，例如 `Comp` 组件会接受一个 `Boolean` 的属性 `foo`  
-    ```typescript
-    const Comp = {
-        props: {
-            foo: Boolean
-        }
-    }
-    ```  
-    但传入的却是其他类型的值  
-    ```html
-    <!-- 示例一: 不传，此时会被解析为 false -->
-    <Comp />
-    <!-- 示例二: 传入空字符传，此时会被解析为 true -->
-    <Comp foo="" />
-    <!-- 示例三: 传入和属性名相同的字符串，此时会被解析为 true -->
-    <Comp foo="foo" />
-    <!-- 示例四: 剩余情况，都会被解析为 false -->
-    <Comp foo="aaa" />
-    ```  
+2. 存在 `Boolean` 类型的属性  
+    如果一个属性定义的类型包含 `Boolean` 但是实际传入的却不是 `Boolean`，此时就会对其进行转化处理  
 
 接下来看具体的实现  
 
@@ -375,13 +358,13 @@ function resolvePropValue(
             if (!hasOwn(props, key) && !hasDefault) {
                 value = false
             }
-            
+            // 如果值为空字符串，或者将 key 进行 kabab-case 转换后与值相等，就会将其转化为 true
             else if (
                 opt[BooleanFlags.shouldCastTrue] &&
                 (value === '' || value === hyphenate(key))
             ) {
                 // 此时如果没有声明 String，或者声明了 String，但是 String 在 Boolean 的后面，即 [ Boolean, String ]
-                // 说明现在 Boolean 的优先级高，如果值为空字符串，或者将 key 进行 kabab-case 转换后与值相等，就会将其转化为 true
+                // 说明现在 Boolean 的优先级高，需要转换
                 value = true
             }
         }
@@ -619,4 +602,75 @@ function getType(ctor: Prop<any>): string {
     const match = ctor && ctor.toString().match(/^\s*function (\w+)/)
     return match ? match[1] : ''
 }
-```  
+```    
+
+# 示例  
+
+## Boolean转换  
+
+```typescript
+let proxy: any
+const Comp = {
+    props: {
+        foo: Boolean,
+        bar: Boolean,
+        baz: Boolean,
+        qux: Boolean,
+        name: [ Boolean, String ],
+        age: [ String, Boolean ],
+        score: [ Object, Boolean ]
+    },
+    render() {
+        proxy = this
+    }
+}
+
+render(
+    h(Comp, {
+        bar: '',
+        baz: 'baz',
+        qux: 'ok',
+        name: '',
+        age: '',
+        score: ''
+    }),
+    document.querySelector( '#root' )
+)
+
+// Comp 的 propsOptions 如下
+[
+    {
+        foo: { type: Boolean, '0': true, '1': true },
+        bar: { type: Boolean, '0': true, '1': true },
+        baz: { type: Boolean, '0': true, '1': true },
+        qux: { type: Boolean, '0': true, '1': true },
+        name: { type: [ Boolean, String ], '0': true, '1': true },
+        age: { type: [ String, Boolean ], '0': true, '1': false },
+        score: { type: [ Object, Boolean, '0': true, '1': true ] }
+    },
+    [
+        'foo', 'bar', 'baz', 'qux', 'name', 'age', 'score'
+    ]
+]
+```    
+
+现在对各个 `props` 进行分析，主要看的是 [resolvePropValue](#resolvePropValue) 中第二个 `if` 的逻辑   
+调用 [resolvePropValue](#resolvePropValue) 之前，参数 `props` 是  
+
+```typescript
+{
+    bar: '',
+    baz: 'baz',
+    qux: 'ok',
+    name: '',
+    age: '',
+    score: ''
+}
+```
+
+1. `foo`: 不存在于 `props` 中也没有默认值，所以它的值是 `false`  
+2. `bar`: `BooleanFlags.shouldCastTrue` 为 `true` 且 `value` 是空字符串，所以它的值是 `true`  
+3. `baz/name`: `BooleanFlags.shouldCastTrue` 为 `true` 且 `value` 和 kabab-case 的 `key` 相同，所以它的值是 `true`  
+4. `qux`: 不满足任何条件，所以它的值还是原来的 `ok`  
+5. `age`: 它的 `String` 优先于 `Boolean`，所以还是原来的 `''`  
+6. `score`: 虽然它的 `Object` 优先于 `Boolean`，但是实际传的值却是 `''`，所以会将其转换为 `true`

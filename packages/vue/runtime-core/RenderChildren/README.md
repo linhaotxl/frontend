@@ -2,6 +2,12 @@
 
 <!-- TOC -->
 
+- [processElement](#processelement)
+- [mountElement](#mountelement)
+- [mountChildren](#mountchildren)
+- [patchElement](#patchelement)
+- [patchProps](#patchprops)
+- [patchChildren](#patchchildren)
 - [patchKeyedChildren](#patchkeyedchildren)
     - [第一步: 处理头部相同的 vnode](#第一步-处理头部相同的-vnode)
     - [第二步: 处理尾部相同的 vnode](#第二步-处理尾部相同的-vnode)
@@ -17,8 +23,569 @@
 
 <!-- /TOC -->
 
+# processElement  
+这个函数是元素节点的入口函数，用来处理节点的挂载或更新  
+
+```typescript
+const processElement = (
+    n1: VNode | null,
+    n2: VNode,
+    container: RendererElement,
+    anchor: RendererNode | null,
+    parentComponent: ComponentInternalInstance | null,
+    parentSuspense: SuspenseBoundary | null,
+    isSVG: boolean,
+    optimized: boolean
+) => {
+    isSVG = isSVG || (n2.type as string) === 'svg'
+
+    if (n1 == null) {
+        // 不存在老节点，说明是第一次渲染，进行挂载
+        mountElement(
+            n2,
+            container,
+            anchor,
+            parentComponent,
+            parentSuspense,
+            isSVG,
+            optimized
+        )
+    } else {
+        // 非第一次渲染，且新旧节点属于相同节点，处理新老节点
+        patchElement(n1, n2, parentComponent, parentSuspense, isSVG, optimized)
+    }
+}
+```  
+
+# mountElement  
+这个函数用来挂载一个新节点，并追加到容器节点中，并且会处理一些 `hooks`（ 包括 `vnode`、指令 ）  
+
+```typescript
+const mountElement = (
+    vnode: VNode,
+    container: RendererElement,
+    anchor: RendererNode | null,
+    parentComponent: ComponentInternalInstance | null,
+    parentSuspense: SuspenseBoundary | null,
+    isSVG: boolean,
+    optimized: boolean
+) => {
+    let el: RendererElement                     // 保存 vnode 对应的真实 DOM 节点
+    let vnodeHook: VNodeHook | undefined | null // 保存 vnode 上的 hooks
+    const {
+        type,
+        props,
+        shapeFlag,
+        transition,
+        scopeId,
+        patchFlag,
+        dirs
+    } = vnode
+
+    if (
+        !__DEV__ &&
+        vnode.el &&
+        hostCloneNode !== undefined &&
+        patchFlag === PatchFlags.HOISTED
+    ) {
+        // If a vnode has non-null el, it means it's being reused.
+        // Only static vnodes can be reused, so its mounted DOM nodes should be
+        // exactly the same, and we can simply do a clone here.
+        // only do this in production since cloned trees cannot be HMR updated.
+        el = vnode.el = hostCloneNode(vnode.el)
+    } else {
+        // 创建真实 DOM 节点并挂载到 vnode 的 el 上
+        el = vnode.el = hostCreateElement(
+            vnode.type as string,
+            isSVG,
+            props && props.is
+        )
+
+        // 处理子节点
+        if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
+            // 子节点为文本节点，例如 <span>hello</span>
+            // 设置 DOM 节点的子节点
+            hostSetElementText(el, vnode.children as string)
+        } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+            // 子节点为数组，例如 <div><span>hello</span></div>
+            // 挂载所有的子节点到新创建的 el 节点
+            mountChildren(
+                vnode.children as VNodeArrayChildren,   // 所有的子节点
+                el,                                     // 容器节点为新创建的节点，会将所有的子节点挂载到 el 上
+                null,                                   // 兄弟节点为 null，挂载的时候依次按照顺序增加
+                parentComponent,
+                parentSuspense,
+                isSVG && type !== 'foreignObject',
+                optimized || !!vnode.dynamicChildren    // 如果存在需要追踪的动态子节点，则使用优化策略
+            )
+        }
+
+        // 同步执行指令的 created hooks
+        if (dirs) {
+            invokeDirectiveHook(vnode, null, parentComponent, 'created')
+        }
+        
+        // 处理 props
+        if (props) {
+            // 遍历所有的 props 并排除内置 prop，将 prop 设置到真实节点 el 上
+            for (const key in props) {
+                if (!isReservedProp(key)) {
+                    hostPatchProp(
+                        el,
+                        key,
+                        null,
+                        props[key],
+                        isSVG,
+                        vnode.children as VNode[],
+                        parentComponent,
+                        parentSuspense,
+                        unmountChildren
+                    )
+                }
+            }
+
+            // 处理 vnode 的 beforeMount hooks，会同步执行 hooks
+            if ((vnodeHook = props.onVnodeBeforeMount)) {
+                invokeVNodeHook(vnodeHook, parentComponent, vnode)
+            }
+        }
+        
+        // scopeId
+        setScopeId(el, scopeId, vnode, parentComponent)
+    }
+
+    // 同步执行指令的 beforeMount hooks
+    if (dirs) {
+        invokeDirectiveHook(vnode, null, parentComponent, 'beforeMount')
+    }
+
+    // #1583 For inside suspense + suspense not resolved case, enter hook should call when suspense resolved
+    // #1689 For inside suspense + suspense resolved case, just call it
+    const needCallTransitionHooks =
+        (!parentSuspense || (parentSuspense && !parentSuspense.pendingBranch)) &&
+        transition &&
+        !transition.persisted
+    if (needCallTransitionHooks) {
+        transition!.beforeEnter(el)
+    }
+
+    // 已经处理完当前节点下的所有子节点和属性设置，所以可以将 el 插入到父节点 container 中，并插入在兄弟节点 anchor 之前
+    hostInsert(el, container, anchor)
+
+    // 处理 vnode 的 mounted hook、指令的 mounted hook
+    // 因为这些 hooks 都需要异步执行，所以会将它们放入异步队列中，等待下一轮微任务
+    if (
+        (vnodeHook = props && props.onVnodeMounted) ||
+        needCallTransitionHooks ||
+        dirs
+    ) {
+        queuePostRenderEffect(() => {
+            vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, vnode)
+            needCallTransitionHooks && transition!.enter(el)
+            dirs && invokeDirectiveHook(vnode, null, parentComponent, 'mounted')
+        }, parentSuspense)
+    }
+}
+```  
+
+# mountChildren  
+挂载所有的子节点  
+
+```typescript
+const mountChildren: MountChildrenFn = (
+    children,
+    container,
+    anchor,
+    parentComponent,
+    parentSuspense,
+    isSVG,
+    optimized,
+    start = 0
+) => {
+    // 遍历所有的 children，对每一个 vnode 进行 patch 操作
+    for ( let i = start; i < children.length; i++ ) {
+        const child = (children[i] = optimized
+            ? cloneIfMounted(children[i] as VNode)
+            : normalizeVNode(children[i]))
+        patch(
+            null,             // 挂载，所以为 null
+            child,
+            container,        // 父节点
+            anchor,
+            parentComponent,
+            parentSuspense,
+            isSVG,
+            optimized
+        )
+    }
+}
+```  
+
+# patchElement  
+这个函数用来更新一个元素节点，并且老 `vnode` 和 新 `vnode` 属于同一类型，大体来说就分为两步  
+1. 处理 `props` 的变化  
+2. 处理 `children` 的变化  
+
+```typescript
+const patchElement = (
+    n1: VNode,
+    n2: VNode,
+    parentComponent: ComponentInternalInstance | null,
+    parentSuspense: SuspenseBoundary | null,
+    isSVG: boolean,
+    optimized: boolean
+) => {
+    // 此时新老 vnode 属于相同的节点，所以新 vnode 可以复用老 vnode 的真实 DOM 节点
+    const el = (n2.el = n1.el!)
+    
+    let { patchFlag, dynamicChildren, dirs } = n2
+    
+    // #1426 take the old vnode's patch flag into account since user may clone a
+    // compiler-generated vnode, which de-opts to FULL_PROPS
+    patchFlag |= n1.patchFlag & PatchFlags.FULL_PROPS
+
+    // 获取老的 props 和新的 props
+    const oldProps = n1.props || EMPTY_OBJ
+    const newProps = n2.props || EMPTY_OBJ
+    
+    let vnodeHook: VNodeHook | undefined | null
+
+    // 同步执行 vnode 的 beforeUpdate 钩子
+    if ((vnodeHook = newProps.onVnodeBeforeUpdate)) {
+        invokeVNodeHook(vnodeHook, parentComponent, n2, n1)
+    }
+
+    // 同步执行指令的 beforeUpdate 钩子
+    if (dirs) {
+        invokeDirectiveHook(n2, n1, parentComponent, 'beforeUpdate')
+    }
+
+    // 检测 vnode 上是否有动态的 props
+    if (patchFlag > 0) {
+        // 存在动态 props
+        // the presence of a patchFlag means this element's render code was
+        // generated by the compiler and can take the fast path.
+        // in this path old node and new node are guaranteed to have the same shape
+        // (i.e. at the exact same position in the source template)
+        // 检测是否有动态 key 的 props，如果有则对所有的 props 进行处理
+        if (patchFlag & PatchFlags.FULL_PROPS) {
+            patchProps(
+                el,
+                n2,
+                oldProps,
+                newProps,
+                parentComponent,
+                parentSuspense,
+                isSVG
+            )
+        }
+        // 否则依次对 class、style 以及会变化的 prop 处理
+        else {
+            // 若存在动态的 class，则对 class 进行设置
+            if (patchFlag & PatchFlags.CLASS) {
+                if (oldProps.class !== newProps.class) {
+                    hostPatchProp(el, 'class', null, newProps.class, isSVG)
+                }
+            }
+
+            // 若存在动态的 style，则对 style 进行设置
+            if (patchFlag & PatchFlags.STYLE) {
+                hostPatchProp(el, 'style', oldProps.style, newProps.style, isSVG)
+            }
+
+            // 若具有除 class 和 style 之外的动态属性，这些属性都会被存储在 vnode 的动态属性 dynamicProps 上
+            // 此时遍历 dynamicProps，如果旧值和新值不相同，则会对其进行设置
+            if (patchFlag & PatchFlags.PROPS) {
+                const propsToUpdate = n2.dynamicProps!
+                for (let i = 0; i < propsToUpdate.length; i++) {
+                    const key = propsToUpdate[i]
+                    const prev = oldProps[key]
+                    const next = newProps[key]
+                    if (
+                        next !== prev ||
+                        (hostForcePatchProp && hostForcePatchProp(el, key))
+                    ) {
+                        hostPatchProp(
+                            el,
+                            key,
+                            prev,
+                            next,
+                            isSVG,
+                            n1.children as VNode[],
+                            parentComponent,
+                            parentSuspense,
+                            unmountChildren
+                        )
+                    }
+                }
+            }
+        }
+
+        // 检测是否存在动态文本，且新旧两次文本不一致会进行更新
+        if (patchFlag & PatchFlags.TEXT) {
+            if (n1.children !== n2.children) {
+                hostSetElementText(el, n2.children as string)
+            }
+        }
+    } else if (!optimized && dynamicChildren == null) {
+        // 不存在动态 key，也没有优化策略，也不存在动态子节点
+        // 此时需要处理全部的 props
+        patchProps(
+            el,
+            n2,
+            oldProps,
+            newProps,
+            parentComponent,
+            parentSuspense,
+            isSVG
+        )
+    }
+
+    const areChildrenSVG = isSVG && n2.type !== 'foreignObject'
+
+    // 处理 children
+    if (dynamicChildren) {
+        // 存在动态 children，则只处理动态 children
+        patchBlockChildren(
+            n1.dynamicChildren!,
+            dynamicChildren,
+            el,
+            parentComponent,
+            parentSuspense,
+            areChildrenSVG
+        )
+    } else if (!optimized) {
+        // 不存在动态 children，也没有优化策略，则对全部子节点进行处理
+        patchChildren(
+            n1,
+            n2,
+            el,
+            null,
+            parentComponent,
+            parentSuspense,
+            areChildrenSVG
+        )
+    }
+
+    // 如果以上两种情况都不满足，例如在更新 span 节点的时候，已经处于 div 的动态节点中，而且本身也没有动态子节点
+    /**
+     * <div><span>{{ name }}</span></div>
+     */
+
+    // 处理 vnode 的 updated 钩子，或者指令的 updated 钩子
+    // 因为这两个钩子需要异步执行，所以需要将它们放入异步队列中，等待下一轮微任务执行
+    if ((vnodeHook = newProps.onVnodeUpdated) || dirs) {
+        queuePostRenderEffect(() => {
+            vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, n2, n1)
+            dirs && invokeDirectiveHook(n2, n1, parentComponent, 'updated')
+        }, parentSuspense)
+    }
+}
+```  
+
+# patchProps  
+这个函数用来全量处理新老 `props` 的差异，并更新  
+
+```typescript
+const patchProps = (
+    el: RendererElement,
+    vnode: VNode,
+    oldProps: Data,
+    newProps: Data,
+    parentComponent: ComponentInternalInstance | null,
+    parentSuspense: SuspenseBoundary | null,
+    isSVG: boolean
+) => {
+    if (oldProps !== newProps) {
+        // 遍历新的 props，过滤掉内置 props 后，如果新 prop 和 旧 prop 的值不一致，就会对其进行更新
+        // 或者新值和旧值相同，但是存在强制更新 hostForcePatchProp，那么也会更新 prop 的值
+        for (const key in newProps) {
+            if (isReservedProp(key)) continue
+            const next = newProps[key]
+            const prev = oldProps[key]
+            if (
+                next !== prev ||
+                (hostForcePatchProp && hostForcePatchProp(el, key))
+            ) {
+                hostPatchProp(
+                    el,
+                    key,
+                    prev,
+                    next,
+                    isSVG,
+                    vnode.children as VNode[],
+                    parentComponent,
+                    parentSuspense,
+                    unmountChildren
+                )
+            }
+        }
+        
+        if (oldProps !== EMPTY_OBJ) {
+            // 遍历老 props，如果 prop 只存在于老 props，不存在于新 props 中，那么需要将这个 prop 删除
+            for (const key in oldProps) {
+                if (!isReservedProp(key) && !(key in newProps)) {
+                    hostPatchProp(
+                        el,
+                        key,
+                        oldProps[key],
+                        null,           // 新的值为 null，表示要删除
+                        isSVG,
+                        vnode.children as VNode[],
+                        parentComponent,
+                        parentSuspense,
+                        unmountChildren
+                    )
+                }
+            }
+        }
+    }
+}
+```  
+
+# patchChildren  
+这个函数用来比较新老 `children` 的入口函数  
+首先会对 `Fragment` 进行处理  
+1. 如果是有 `key` 的 `Fragment` 则会调用 [patchKeyedChildren](#patchKeyedChildren) 对新老 `children` 进行处理  
+2. 如果是没有 `key` 的 `Fragment` 则会调用 [patchUnkeyedChildren](#patchUnkeyedChildren) 对新老 `children` 进行处理  
+
+对于其他类型的 `vnode` 来说，`children` 无非就三种: 文本、数组以及 `null`，而这三种都是可以通过 [shapeFlag](#shapeFlag) 来区分的   
+
+1. 新的是文本  
+ * 旧的是数组 -> 卸载数组中的所有节点  
+ * 新 `children` 和旧 `children` 不一致时，更新节点的子节点  
+
+2. 新的不是文本( 列表/`null` )  
+ * 旧的是数组  
+    * 新的是数组 -> 新旧都是数组，通过 [patchKeyedChildren](#patchKeyedChildren) 依次比较每个节点  
+    * 新的不是数组，不管新的是什么，直接卸载老 `children` 里的所有节点  
+ * 旧的不是数组（ 文本/`null` ）  
+    * 旧的是文本，将子节点内容清空  
+      新的是数组 -> 通过 [mountChildren](#mountChildren) 挂载所有新的节点   
+
+```typescript
+const patchChildren: PatchChildrenFn = (
+    n1,
+    n2,
+    container,
+    anchor,
+    parentComponent,
+    parentSuspense,
+    isSVG,
+    optimized = false
+) => {
+    const c1 = n1 && n1.children
+    const prevShapeFlag = n1 ? n1.shapeFlag : 0
+    const c2 = n2.children
+
+    const { patchFlag, shapeFlag } = n2
+    // fast path
+    if (patchFlag > 0) {
+        if (patchFlag & PatchFlags.KEYED_FRAGMENT) {
+            // this could be either fully-keyed or mixed (some keyed some not)
+            // presence of patchFlag means children are guaranteed to be arrays
+            patchKeyedChildren(
+                c1 as VNode[],
+                c2 as VNodeArrayChildren,
+                container,
+                anchor,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+            return
+        } else if (patchFlag & PatchFlags.UNKEYED_FRAGMENT) {
+            // unkeyed
+            patchUnkeyedChildren(
+                c1 as VNode[],
+                c2 as VNodeArrayChildren,
+                container,
+                anchor,
+                parentComponent,
+                parentSuspense,
+                isSVG,
+                optimized
+            )
+            return
+        }
+    }
+
+    // children：text、array、none
+    if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
+        // now: text
+        // text children fast path
+        if (prevShapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+            // now: text
+            // prev: array
+            // 之前是列表节点，需要将列表节点卸载
+            unmountChildren(c1 as VNode[], parentComponent, parentSuspense)
+        }
+
+        if (c2 !== c1) {
+            // now: text
+            // 当前是文本节点，如果和之前不相同，都需要重新设置内容
+            hostSetElementText(container, c2 as string)
+        }
+    } else {
+        // now: array | none
+
+        if (prevShapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+        // now: array | none
+        // prev: array
+
+            if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+                // now: array
+                // prev: array
+                // 两次都是列表，需要 diff
+                patchKeyedChildren(
+                    c1 as VNode[],
+                    c2 as VNodeArrayChildren,
+                    container,
+                    anchor,
+                    parentComponent,
+                    parentSuspense,
+                    isSVG,
+                    optimized
+                )
+            } else {
+                // now: none
+                // prev: array
+                // 没有子节点，仅需要卸载旧的列表节点
+                unmountChildren(c1 as VNode[], parentComponent, parentSuspense, true)
+            }
+        } else {
+            // now: array | none
+            // prev: text | none
+
+            if (prevShapeFlag & ShapeFlags.TEXT_CHILDREN) {
+                // now: array | none
+                // prev: text
+                hostSetElementText(container, '')
+            }
+
+            if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
+                // now: array
+                // prev: text | none
+                // 如果现在的子节点是列表，则挂载列表节点
+                mountChildren(
+                    c2 as VNodeArrayChildren,
+                    container,
+                    anchor,
+                    parentComponent,
+                    parentSuspense,
+                    isSVG,
+                    optimized
+                )
+            }
+        }
+    }
+}
+``` 
+      
+
 # patchKeyedChildren  
-这个函数就是用来比较老 `children` 和 新 `children` 的区别，并对每一个 `vnode` 进行 [patch](#patch) 操作，也就是实现了 `Diff` 算法，总共有五个步骤  
+这个函数就是用来比较老 `children` 和 新 `children` 的区别，并对每一个 `vnode` 进行 [patch](#patch) 操作，也就是实现了 `Diff` 的核心算法，总共有五个步骤  
 
 ## 第一步: 处理头部相同的 vnode  
 从头开始，遍历新老 `children` 两个列表公共部分  

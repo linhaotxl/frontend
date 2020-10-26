@@ -12,6 +12,8 @@
         - [newIndexToOldIndexMap](#newindextooldindexmap)
         - [如何知道 vnode 发生了移动](#如何知道-vnode-发生了移动)
         - [遍历老 vnode](#遍历老-vnode)
+        - [获取最长稳定子序列](#获取最长稳定子序列)
+        - [遍历未被 patch 的 vnode](#遍历未被-patch-的-vnode)
 
 <!-- /TOC -->
 
@@ -244,6 +246,64 @@ for ( i = s1; i <= e1; i++ ) {
         )
         // patch 个数 + 1
         patched++
+    }
+}
+```  
+
+### 获取最长稳定子序列  
+
+通过 [getSequence](#getSequence) 函数，计算 [newIndexToOldIndexMap](#newIndexToOldIndexMap) 的最长稳定子序列，计算结果里，每个元素都是新 `children` 中稳定 `vnode` 的位置索引，并且该索引是从未被 `patch` 的列表开始计算的，即 `s2` 开始  
+稳定 `vnode` 的意思就是不需要发生移动，和原来的位置一样  
+
+```typescript
+// 当有 vnode 移动时，计算稳定序列，否则就是空数组
+const increasingNewIndexSequence = moved
+    ? getSequence(newIndexToOldIndexMap)
+    : EMPTY_ARR
+
+// 指向稳定节点的指针，从后往前
+let j = increasingNewIndexSequence.length - 1
+```  
+
+### 遍历未被 patch 的 vnode  
+这是最后一步，在这一步中会去处理需要移动的 `vnode` 以及新增的 `vnode`  
+
+```typescript
+// 从后往前遍历未被 patch 的节点列表
+for ( i = toBePatched - 1; i >= 0; i-- ) {
+    // 现在 i 是在未被 patch 列表里的索引，而且是从后往前
+    // s2 是新列表中，第一个不相同 vnode 的索引，可以理解为未被 patch 列表中，第一个元素从头开始计算的索引
+    // s2 + i 就是，未被 patch 的 vnode，从头计算的索引，可以直接从新列表里获取对应的 vnode
+    const nextIndex = s2 + i
+    // 从新列表获取需要新的 vnode
+    const nextChild = c2[nextIndex] as VNode
+    // 获取 anchor 节点，检测下一个索引是否存在于列表中，如果存在，则取下一个节点，否则取父 anchor
+    const anchor = nextIndex + 1 < l2
+        ? (c2[nextIndex + 1] as VNode).el
+        : parentAnchor
+
+    // 如果 newIndexToOldIndexMap 中的元素为 0，说明旧列表中不存在，此时需要挂载
+    if (newIndexToOldIndexMap[i] === 0) {
+        patch(
+            null,
+            nextChild,
+            container,
+            anchor,
+            parentComponent,
+            parentSuspense,
+            isSVG
+        )
+    } else if (moved) {
+        // 发生移动，有两种情况需要移动节点
+        if (
+            j < 0 ||                            // 已经不存在稳定 vnode，只剩下需要移动的 vnode 了
+            i !== increasingNewIndexSequence[j] // 当前 vnode 在未被 patch 节点里的索引，和稳定列表里的索引不相同，说明不是稳定 vnode，因为 i 和 j 都是从后往前的指针，所以这里可以直接判断 i 和 increasingNewIndexSequence[j]
+        ) {
+            move(nextChild, container, anchor, MoveType.REORDER)
+        } else {
+            // 当前节点是稳定节点，指针向前移动一位
+            j--
+        }
     }
 }
 ```

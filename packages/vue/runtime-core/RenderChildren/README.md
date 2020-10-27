@@ -24,7 +24,7 @@
 <!-- /TOC -->
 
 # processElement  
-这个函数是元素节点的入口函数，用来处理节点的挂载或更新  
+这个函数是元素节点的入口函数，用来处理元素的挂载或更新，只会被调用在 [patch](#patch) 函数内  
 
 ```typescript
 const processElement = (
@@ -58,7 +58,7 @@ const processElement = (
 ```  
 
 # mountElement  
-这个函数用来挂载一个新节点，并追加到容器节点中，并且会处理一些 `hooks`（ 包括 `vnode`、指令 ）  
+这个函数用来挂载一个新元素节点，并追加到容器节点中，并且会处理一些 `hooks`（ 包括 `vnode`、指令 ）  
 
 ```typescript
 const mountElement = (
@@ -103,15 +103,15 @@ const mountElement = (
 
         // 处理子节点
         if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
-            // 子节点为文本节点，例如 <span>hello</span>
+            // 子节点为文本节点，例如 <span>hello</span>
             // 设置 DOM 节点的子节点
             hostSetElementText(el, vnode.children as string)
         } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
-            // 子节点为数组，例如 <div><span>hello</span></div>
-            // 挂载所有的子节点到新创建的 el 节点
+            // 子节点为数组，例如 <div><span>hello</span></div>
+            // 挂载所有的子节点到新创建的 el DOM 节点上
             mountChildren(
-                vnode.children as VNodeArrayChildren,   // 所有的子节点
-                el,                                     // 容器节点为新创建的节点，会将所有的子节点挂载到 el 上
+                vnode.children as VNodeArrayChildren,   // 所有的子 children vnode
+                el,                                     // 容器节点为新创建的节点，会将所有的子 vnode 挂载到 el 上
                 null,                                   // 兄弟节点为 null，挂载的时候依次按照顺序增加
                 parentComponent,
                 parentSuspense,
@@ -120,7 +120,7 @@ const mountElement = (
             )
         }
 
-        // 同步执行指令的 created hooks
+        // 同步执行指令的 created 钩子
         if (dirs) {
             invokeDirectiveHook(vnode, null, parentComponent, 'created')
         }
@@ -144,7 +144,7 @@ const mountElement = (
                 }
             }
 
-            // 处理 vnode 的 beforeMount hooks，会同步执行 hooks
+            // 同步执行 vnode 的 beforeMount 钩子
             if ((vnodeHook = props.onVnodeBeforeMount)) {
                 invokeVNodeHook(vnodeHook, parentComponent, vnode)
             }
@@ -154,7 +154,7 @@ const mountElement = (
         setScopeId(el, scopeId, vnode, parentComponent)
     }
 
-    // 同步执行指令的 beforeMount hooks
+    // 同步执行指令的 beforeMount 钩子
     if (dirs) {
         invokeDirectiveHook(vnode, null, parentComponent, 'beforeMount')
     }
@@ -172,8 +172,8 @@ const mountElement = (
     // 已经处理完当前节点下的所有子节点和属性设置，所以可以将 el 插入到父节点 container 中，并插入在兄弟节点 anchor 之前
     hostInsert(el, container, anchor)
 
-    // 处理 vnode 的 mounted hook、指令的 mounted hook
-    // 因为这些 hooks 都需要异步执行，所以会将它们放入异步队列中，等待下一轮微任务
+    // 处理 vnode 的 mounted 钩子、指令的 mounted 钩子
+    // 因为这些 钩子 都需要异步执行，所以会将它们放入异步队列中，等待下一轮微任务
     if (
         (vnodeHook = props && props.onVnodeMounted) ||
         needCallTransitionHooks ||
@@ -855,6 +855,7 @@ for ( i = toBePatched - 1; i >= 0; i-- ) {
     const nextChild = c2[nextIndex] as VNode
     // 获取下一个兄弟节点，无论是新增还是插入，都需要在这个兄弟节点之前
     // 检测下一个索引是否存在于列表中，如果存在，则取下一个节点，否则取父 anchor
+    // 因为是从后往前处理，所以 newIndex 之后的真实 DOM 节点已经和 c2 是一致的了，所以可以直接从 c2 里的 vnode 上获取真实 el 作为兄弟节点
     const anchor = nextIndex + 1 < l2
         ? (c2[nextIndex + 1] as VNode).el
         : parentAnchor

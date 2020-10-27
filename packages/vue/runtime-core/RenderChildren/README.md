@@ -2,6 +2,7 @@
 
 <!-- TOC -->
 
+- [优化策略](#优化策略)
 - [processElement](#processelement)
 - [mountElement](#mountelement)
 - [mountChildren](#mountchildren)
@@ -20,8 +21,27 @@
         - [遍历老 vnode](#遍历老-vnode)
         - [获取最长稳定子序列](#获取最长稳定子序列)
         - [遍历未被 patch 的 vnode](#遍历未被-patch-的-vnode)
+- [示例](#示例)
+    - [带有 key 移动节点](#带有-key-移动节点)
+    - [不带有 key 移动节点](#不带有-key-移动节点)
 
 <!-- /TOC -->
+
+# 优化策略  
+optimized  
+1. 处理子节点
+optimized
+    ? cloneIfMounted
+    : normalizeVNode
+
+2. patchElement
+!optimized && dynamicChildren == null -> 全量更新 props
+!optimized -> 全量更新 children  
+
+3. patch 动态节点时，始终会进行优化策略，包括自节点，也只会处理追踪的动态节点，剩余的节点是不会处理的  
+[patchBlockChildren](#patchBlockChildren)  
+
+mountChildren 是，如果存在动态子节点，则使用优化策略
 
 # processElement  
 这个函数是元素节点的入口函数，用来处理元素的挂载或更新，只会被调用在 [patch](#patch) 函数内  
@@ -884,4 +904,78 @@ for ( i = toBePatched - 1; i >= 0; i-- ) {
         }
     }
 }
-```
+```  
+
+# 示例  
+
+## 带有 key 移动节点  
+
+下面的节点类似于 `<div key="A">A</div>` 这样  
+
+旧 `children`: A B C D E   
+新 `children`: A C F B E
+
+更新流程: [patchElement](#patchElement) -> [patchChildren](#patchChildren) -> [patchKeyedChildren](#patchKeyedChildren)  
+
+1. 经过前两个步骤，会将 A 和 E `patch`，此时 i 为 `1`，e1 为 `4`，e2 为 4，容器里的内容是 A B C D E，接下来进入第五步  
+2. 计算 `keyToNewIndexMap` 的内容为  
+    
+    ```typescript
+    {
+        C: 1,
+        F: 2,
+        B: 3,
+    }
+    ```  
+
+3. 初始化 `newIndexToOldIndexMap` 为 `[ 0, 0, 0 ]`  
+
+4. 遍历老 `children`  
+    *  `prevChild` 是 B，根据 key 获取新索引，`newIndex` 就是 3，更新 `newIndexToOldIndexMap` 为 `[ 0, 0, 2 ]`，更新最大索引值为 2，`patch` 新老节点 B，容器内容不变  
+    *  `prevChild` 是 C，根据 key 获取新索引，`newIndex` 就是 1，更新 `newIndexToOldIndexMap` 为 `[ 3, 0, 2 ]`，递增情况被打破，发生移动，`patch` 新老节点 C，容器内容不变  
+    *  `prevChild` 是 D，根据 key 获取新索引，`newIndex` 就是 `undefined`，新 `children` 中不存在 D，卸载 D，容器内容是 A B C E  
+
+5. 获取最长稳定子序列是 `[ 2 ]`，只有 B 是稳定的  
+
+6. 遍历未被 `patch` 的列表  
+    * `nextIndex` 是 3，`nextChild` 是 B，`anchor` 是 E，该位置存在对应的老 `vnode`，所以是非新增，并且是一个稳定的 `vnode`，所以什么也不会做，容器内容不变  
+    * `nextIndex` 是 2，`nextChild` 是 F，`anchor` 是 B，该位置不存在对应的老 `vnode`，所以新增，调用 `patch` 处理，并插入到 B 前面，容器内容是 A F B C E   
+    * `nextIndex` 是 1，`nextChild` 是 C，`anchor` 是 F，该位置存在对应的老 `vnode`，所以是非新增，而且还需要移动，放在 F 的前面，容器内容是 A C F B E  
+
+到这里整个更新过程就结束了  
+
+## 不带有 key 移动节点  
+
+下面字母节点类似于 `<div>A</div>`，数字节点类似于 `<div key="1">1</div>` 这样  
+
+旧: 1 A B C  
+新: D A B C 1 E  
+
+更新流程: [patchElement](#patchElement) -> [patchChildren](#patchChildren) -> [patchKeyedChildren](#patchKeyedChildren)  
+
+1. 第一个步骤没有相同的 `vnode`，第二个步骤会将 C 和 E `patch`，它们的 `tag` 和 `key` 都相同，此时 i 为 0，e1 为 2，e2 为 4，容器里的内容是 1 A B E  
+2. 计算 `keyToNewIndexMap` 的内容为  
+    
+    ```typescript
+    {
+        1: 4
+    }
+    ```  
+
+3. 初始化 `newIndexToOldIndexMap` 为 `[ 0, 0, 0, 0, 0 ]`  
+4. 遍历老 `children`  
+    *  `prevChild` 是 1，根据 key 获取新索引，`newIndex` 就是 4，更新 `newIndexToOldIndexMap` 为 `[ 0, 0, 0, 0, 1 ]`，更新最大索引值为 4，`patch` 新老节点 1，容器内容不变  
+    *  `prevChild` 是 A，`newIndex` 是新 `children` 里第一个相同类型且还没设置老 `vnode` 的索引，即 0，更新 `newIndexToOldIndexMap` 为 `[ 2, 0, 0, 0, 1 ]`，递增情况被打破，发生移动，`patch` 新老 `vnode` D 和 A，容器内容为  1 D B E  
+    *  `prevChild` 是 B，`newIndex` 是新 `children` 里第一个相同类型且还没设置老 `vnode` 的索引，即 1，更新 `newIndexToOldIndexMap` 为 `[ 2, 3, 0, 0, 1 ]`，递增情况被打破，发生移动，`patch` 新老 `vnode` A 和 B，容器内容为  1 D A E   
+
+5. 获取最长稳定子序列是 `[ 0, 1 ]`，只有 B 是稳定的  
+
+6. 遍历未被 `patch` 的列表  
+    * `nextIndex` 是 4，`nextChild` 是 1，`anchor` 是 E，该位置存在对应的老 `vnode`，所以是非新增，并不是一个稳定的 `vnode`，所以会移动到 E 前，容器内容为 D A 1 E    
+    * `newIndex` 是 3，`nextChild` 是 C，`anchor` 是 1，该位置不存在老 `vnode`，所以是新增，插入到 1 之前，容器内容为 D A C 1 E  
+    * `newIndex` 是 2，`nextChild` 是 B，`anchor` 是 C，该位置不存在老 `vnode`，所以是新增，插入到 C 之前，容器内容为 D A B C 1 E  
+    * `newIndex` 是 1，`nextChild` 是 A，`anchor` 是 B，该位置存在老 `vnode`，且是一个稳定 `vnode`，所以什么也不做  
+    * `newIndex` 是 0，`nextChild` 是 D，`anchor` 是 A，该位置存在老 `vnode`，且是一个稳定 `vnode`，所以什么也不做   
+
+**为什么稳定 vnode 是 D 和 A ？**  
+在遍历老 `children` 这一步，主要做的就是将老 `vnode` 转换为新 `vnode`，但是位置并没有发生变化，所以转换后的结果 1 D A E 与新 `children` 相比，就会发现稳定的的确是 D 和 A 了  

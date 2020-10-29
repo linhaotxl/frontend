@@ -10,3 +10,12 @@ const isObject = (val: unknown): val is Record<any, any> => val !== null && type
 
 ## toRawType  
 这个方法就是获取类型的字符串，就是截取 `Object.prototype.toString` 的结果
+
+## def  
+通过 `Object.defineProperty` 来定义一个对象的属性  
+
+```typescript
+const def = ( obj: object, key: string | symbol, value: any ) => {
+  Object.defineProperty( obj, key, { value } )
+}
+```

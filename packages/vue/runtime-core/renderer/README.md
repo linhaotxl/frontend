@@ -25,7 +25,7 @@
 
 # 公用变量  
 ## isReservedProp  
-这个变量存储的是 Vue 内置的 prop，遇到这些 prop 的时候，并不会对其进行处理（ 设置真实节点的属性 ）  
+这个变量存储的是 Vue 内置的 prop，遇到这些 prop 的时候，Vue 会内置处理，而不会作用在真实节点上  
 
 ```typescript
 const isReservedProp = /*#__PURE__*/ makeMap(
@@ -144,7 +144,7 @@ function baseCreateRenderer (
 
 # patch  
 这个方法是处理节点的入口方法，无论是否是第一次渲染都需要由这个方法开始。它主要做三件事  
-1. 如果此时不一次渲染，检查新老节点是否是相同节点，如果不是，则卸载老节点，接下来走挂载新节点的流程（ 相当于第一次渲染 ）  
+1. 如果不是第一次渲染，检查新老节点是否是相同节点，如果不是，则卸载老节点，接下来走挂载新节点的流程（ 相当于第一次渲染 ）  
 2. 针对不同的新节点类型，调用不同的 [执行操作方法](#执行操作方法) 来完成  
 3. 设置 `ref`  
 
@@ -280,7 +280,7 @@ const patch: PatchFn = (
 </div>
 ```  
 
-如果属于同一节点，之后的 `process` 内会走更新流程，而且更新流程内是可以直接复用老的真实节点的，因为它们的节点类型一致  
+如果属于同一节点，之后的 `process` 内会走更新流程，而更新流程内是可以直接复用老的真实节点的，因为它们的节点类型一致  
 
 ## processElement  
 这个方法只在 [patch](#patch) 内调用，用于处理当前渲染的是一个 **元素节点**  
@@ -341,7 +341,7 @@ const processText: ProcessTextOrCommentFn = ( n1, n2, container, anchor ) => {
     } else {
         // ①
         // 非第一次渲染，因为文本节点只有内容，没有其他的 props，所以不需要额外的处理，只管里面的内容
-        // 所以直接复用老的真实节点，而且只有文本内容不一致时，才会更新真实节点的内容为新的内容
+        // 直接复用老的真实节点，而且只有文本内容不一致时，才会更新真实节点的内容为新的内容
         const el = (n2.el = n1.el!)
         if ( n2.children !== n1.children ) {
             // 如果文本内容不相同，则重新设置文本
@@ -370,6 +370,7 @@ const mountElement = (
     isSVG: boolean,
     optimized: boolean
 ) => {
+    // 存储真实节点
     let el: RendererElement
     let vnodeHook: VNodeHook | undefined | null
     // 获取新节点的相关属性
@@ -433,7 +434,7 @@ const mountElement = (
             // 在不同平台上，将真实节点 el 的内容设置为该文本
             hostSetElementText(el, vnode.children as string)
         } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
-            ①
+            // ①
             // 子节点是列表，例如 <div><span>hello</span></div>
             // 挂载所有的子节点到新创建的 el 节点
             mountChildren(
@@ -452,7 +453,7 @@ const mountElement = (
         }
     }
 
-    // 此时，已经将 el 的 props，以及子节点都挂载到了 el 上，所以调用不同平台的插入操作，将 el 插入到 container 中
+    // 此时，已经将 el 的 props，以及 children 都挂载到了 el 上，所以调用不同平台的插入操作，将 el 插入到 container 中
     hostInsert(el, container, anchor)
 
     if (
@@ -786,10 +787,11 @@ const patchChildren: PatchChildrenFn = (
 1. 从头开始遍历 新老子节点 公共的部分，并 `patch` 每个节点，直至第一个不相同的节点为止，会记录下从头开始第一个不相同节点的索引 `i`  
 2. 如果第一步没有 `patch` 完全部的节点，再从尾开始遍历 新老子节点 公共的部分，并 `patch` 每个节点，直至第一个不相同的节点为止，会记录下从尾开始第一个不相同节点的索引，老节点是 `e1` 新节点是 `e2`   
 3. 处理连续新增的节点，这种情况对几个值的理解  
-    `i` 可以理解为增加的起始下标(因为它是第一个不相同的索引，所以需要从这里开始增加)  
+    `i` 可以理解为增加的起始下标(因为它是第一个不相同的索引，所以需要从这个位置开始增加)  
     `e2` 可以理解为增加的终止下标(因为 `e2` 是新列表中最后一个不相同的节点，所以要从 `i` 的位置，一直加到 `e2` 对应位置的节点，包括 `e2`)  
+    
     所以需要同时满足两个条件
-      * `i > e1`
+      * `i > e1`，说明此时是插入新节点
       * “待插入节点的索引” 要比 “新插入节点的最后一个索引” 小或相等，即 `i <= e2`
     
     <img src="./imgs/diff_add.png" width="800" />
@@ -798,7 +800,7 @@ const patchChildren: PatchChildrenFn = (
     `e1` 可以理解为删除的终止下标(因为 `e1` 是旧列表中最后一个不相同的节点，所以要从 `i` 的的位置，一直删到 `e1` 对应位置的节点，包括 `e1`)  
     所以需要同时满足两个条件  
       * “待删除节点的索引” 要比 “最后一个删除的节点索引” 小或相等，即 `i <= e1`  
-      * `i > e2`  
+      * `i > e2`，说明此时是删除旧节点  
       
     <img src="./imgs/diff_remove.jpg" width="800" />
 5. 处理其他情况，参照 [处理其他情况](#处理其他情况)  

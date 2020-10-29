@@ -5,10 +5,9 @@
 - [介绍](#介绍)
 - [刷新队列](#刷新队列)
 - [job](#job)
-- [全局变量](#全局变量)
-    - [job](#job-1)
-    - [pre](#pre)
-    - [post](#post)
+    - [queueJob](#queuejob)
+- [pre cb](#pre-cb)
+- [post cb](#post-cb)
 
 <!-- /TOC -->
 
@@ -19,8 +18,14 @@
 2. 普通任务，称之为 `job`  
 3. 执行任务后的操作，称之为 `post cb` 
 
-上面这三种任务都是异步任务，会放进微任务队列中等待执行  
-  
+上面这三种任务都是异步任务，每一种任务都会有一个专门的队列去存储，而源码中会有一个专门执行任务的方法 [flushJobs](#flushJobs)，这个方法会按照下面的顺序去执行所有任务  
+1. 遍历 `pre cb` 队列，执行每个任务，遍历完成后再次检查 `pre cb` 队列是否有任务，如果有再次遍历，直到 `pre cb` 队列为空  
+    在每个 `pre cb` 任务中可能会再次对 `pre cb` 入队操作，所以会先把所有的 `pre cb` 都执行，包括这个期间入队的 `pre cb`  
+2. 遍历 `job` 队列，执行每个任务  
+3. 遍历 `post cb` 队列，执行每个任务   
+4. 再次检测 `job` 和 `post cb` 两个队列是否存在任务，如果存在的话再次执行 [flushJobs](#flushJobs)  
+    在第 2、3 两步可能会出现 `job` 和 `post cb` 的入队操作，所以这里会再次检测一遍  
+
 在 vue 中，当数据变化时会触发 “异步更新” 去操作 DOM，而这一 “异步更新” 过程就属于一个 `job`，而在更新结束后会触发对应的钩子函数，这一过程就属于 `post cb`  
 
 在我们执行任务的时候，会存在两种状态  
@@ -50,10 +55,11 @@ function queueFlush() {
 }
 ```  
 
-实际上是把 `flushJobs` 放进微任务队列中，等到同步任务执行结束后，才会执行 `flushJobs` 遍历所有的队列，执行里面的每一个具体任务  
+实际上是把 [flushJobs](#flushJobs) 放进微任务队列中，等到同步任务执行结束后，才会执行 [flushJobs](#flushJobs) 遍历所有的队列，执行里面的每一个具体任务  
 
 # job  
 `job` 使用下面几个全局变量控制  
+
 ```typescript
 // 保存 job 的队列
 const queue: (SchedulerJob | null)[] = []
@@ -61,19 +67,32 @@ const queue: (SchedulerJob | null)[] = []
 let flushIndex = 0
 ```  
 
+## queueJob  
+这个方法是 `job` 任务的入队操作  
 
-# 全局变量  
-对于每一种类型的任务，都会有几个相关的全局变量  
-
-## job  
 ```typescript
-// 保存 job 的队列
-const queue: (SchedulerJob | null)[] = []
-// 遍历 job 队列的索引
-let flushIndex = 0
+export function queueJob( job: SchedulerJob ) {
+    if (
+        (!queue.length ||
+        !queue.includes(
+            job,
+            isFlushing && job.allowRecurse ? flushIndex + 1 : flushIndex
+        )) &&
+        job !== currentPreFlushParentJob
+    ) {
+        queue.push(job)
+        queueFlush()
+    }
+}
 ```  
 
-## pre  
+注意：以下情况才会入队成功  
+1. 当前入队的 `job` 不是 `currentPreFlushParentJob`，那 `currentPreFlushParentJob` 这个变量是什么  
+    
+
+# pre cb  
+`pre cb` 使用下面几个全局变量控制  
+
 ```typescript
 // 保存 pre 的队列
 const pendingPreFlushCbs: SchedulerCb[] = []
@@ -82,7 +101,9 @@ let activePreFlushCbs: SchedulerCb[] | null = null
 let preFlushIndex = 0
 ```  
 
-## post  
+# post cb
+`post cb` 使用下面几个全局变量控制  
+
 ```typescript
 // 保存 post 的队列
 const pendingPostFlushCbs: SchedulerCb[] = []

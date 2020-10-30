@@ -8,11 +8,6 @@
 - [anchor](#anchor)
 - [processElement](#processelement)
 - [mountElement](#mountelement)
-- [mountChildren](#mountchildren)
-- [patchElement](#patchelement)
-- [patchProps](#patchprops)
-- [patchChildren](#patchchildren)
-- [patchBlockChildren](#patchblockchildren)
 - [patchKeyedChildren](#patchkeyedchildren)
     - [第一步: 处理头部相同的 vnode](#第一步-处理头部相同的-vnode)
     - [第二步: 处理尾部相同的 vnode](#第二步-处理尾部相同的-vnode)
@@ -58,7 +53,10 @@ optimized
 
 [patchBlockChildren](#patchBlockChildren)  
 
-mountChildren 是，如果存在动态子节点，则使用优化策略
+mountChildren 是，如果存在动态子节点，则使用优化策略  
+
+<!-- # 优化模式  
+1. 在创建元素节点时，如果存在子 `children`，且存在动态子 `children`，则使用优化模式  
 
 # processElement  
 这个函数是元素节点的入口函数，用来处理元素的挂载或更新，只会被调用在 [patch](#patch) 函数内  
@@ -95,7 +93,7 @@ const processElement = (
 ```  
 
 # mountElement  
-这个函数用来挂载一个新元素节点，并追加到容器节点中，并且会处理一些 `hooks`（ 包括 `vnode`、指令 ）  
+这个函数用来挂载一个新元素节点，并追加到容器节点中，并且会处理一些钩子函数（ 包括 `vnode`、指令 ）  
 
 ```typescript
 const mountElement = (
@@ -223,10 +221,10 @@ const mountElement = (
         }, parentSuspense)
     }
 }
-```  
+```   -->
 
-# mountChildren  
-挂载所有的子节点  
+<!-- # mountChildren  
+挂载 `vnode` 的子 `children`，会从指定位置索引开始挂载  
 
 ```typescript
 const mountChildren: MountChildrenFn = (
@@ -256,11 +254,11 @@ const mountChildren: MountChildrenFn = (
         )
     }
 }
-```  
+```   -->
 
-# patchElement  
-这个函数用来更新一个元素节点，并且老 `vnode` 和 新 `vnode` 属于同一类型，大体来说就分为两步  
-1. 处理 `props` 的变化  
+<!-- # patchElement  
+这个函数用来更新一个节点，并且会在更新前后触发各种钩子函数，此时老 `vnode` 和 新 `vnode` 属于同一类型，所以可以复用对应的真实节点，总共有两步  
+1. 处理 `props` 的变化：会根据是否有 `patchFlag` 来决定是局部更新还是全局更新  
 2. 处理 `children` 的变化  
 
 ```typescript
@@ -285,6 +283,7 @@ const patchElement = (
     const oldProps = n1.props || EMPTY_OBJ
     const newProps = n2.props || EMPTY_OBJ
     
+    // 保存 vnode 的生命周期钩子
     let vnodeHook: VNodeHook | undefined | null
 
     // 同步执行 vnode 的 beforeUpdate 钩子
@@ -416,9 +415,9 @@ const patchElement = (
 
 会使用优化模式的情况有以下几种  
 1. 当前处理的是动态 `vnode`（ 即 `vnode.dynamicChildren` 里 ），在 [patchblockchildren](#patchblockchildren) 中会 `patch` 将新老 `vnode`，注意最后一个参数为 `true`，使用优化模式  
-2. `patchFlag` 不为 0 的 `Fragment` 会使用优化模式，在 [processFragment](#processFragment) 中会开启优化模式  
+2. `patchFlag` 不为 0 的 `Fragment` 会使用优化模式，在 [processFragment](#processFragment) 中会开启优化模式   -->
 
-# patchProps  
+<!-- # patchProps  
 这个函数用来全量处理新老 `props` 的差异，并更新  
 
 ```typescript
@@ -476,15 +475,12 @@ const patchProps = (
         }
     }
 }
-```  
+```   -->
 
-# patchChildren  
-这个函数用来比较新老 `children` 的入口函数  
-首先会对 `Fragment` 进行处理  
-1. 如果是有 `key` 的 `Fragment` 则会调用 [patchKeyedChildren](#patchKeyedChildren) 对新老 `children` 进行处理  
-2. 如果是没有 `key` 的 `Fragment` 则会调用 [patchUnkeyedChildren](#patchUnkeyedChildren) 对新老 `children` 进行处理  
-
-对于其他类型的 `vnode` 来说，`children` 无非就三种: 文本、数组以及 `null`，而这三种都是可以通过 [shapeFlag](#shapeFlag) 来区分的   
+<!-- # patchChildren  
+这个函数用来比较新老 `children` 的入口函数，会处理两种类型的节点   
+1. `Fragment`：会对 `KEYED_FRAGMENT` 以及 `UNKEYED_FRAGMENT` 这两种 `Fragment` 特殊处理  
+2. 其他节点，`children` 无非就三种: 文本、数组以及 `null`，而这三种都是可以通过 [shapeFlag](#shapeFlag) 来区分的   
 
 1. 新的是文本  
  * 旧的是数组 -> 卸载数组中的所有节点  
@@ -615,9 +611,9 @@ const patchChildren: PatchChildrenFn = (
         }
     }
 }
-```  
+```   -->
 
-# patchBlockChildren  
+<!-- # patchBlockChildren  
 这个函数用来比较新老动态 `children`，  
 
 ```typescript
@@ -662,7 +658,7 @@ const patchBlockChildren: PatchBlockChildrenFn = (
         )
     }
 }
-```
+``` -->
 
 # patchKeyedChildren  
 这个函数就是用来比较老 `children` 和 新 `children` 的区别，并对每一个 `vnode` 进行 [patch](#patch) 操作，也就是实现了 `Diff` 的核心算法，总共有五个步骤  

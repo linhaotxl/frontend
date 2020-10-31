@@ -3,6 +3,7 @@
 <!-- TOC -->
 
 - [源码中用到的工具函数](#源码中用到的工具函数)
+- [名词解释](#名词解释)
 - [processComponent](#processcomponent)
 - [mountComponent](#mountcomponent)
     - [createComponentInstance](#createcomponentinstance)
@@ -19,9 +20,25 @@
 # 源码中用到的工具函数  
 1. [invokeArrayFns](#invokeArrayFns)  
 2. [invokeVNodeHook](#invokeVNodeHook)  
+3. [callWithErrorHandling](#callWithErrorHandling)  
+3. [queuePostRenderEffect](#queuePostRenderEffect)  
+
+# 名词解释  
+1. 有如下的组件 `Comp`，这之后会称这个对象为 **“组件对象”**  
+  
+    ```typescript
+    const Comp = {
+        setup () {
+            // ...
+        },
+        render () {
+            // ... 
+        }
+    }
+    ```
 
 # processComponent  
-这个函数是组件的入口函数，用来处理组件的挂载或者更新  
+这个函数是组件的入口函数，用来处理组件的挂载或者更新，只会在 [patch](#patch) 中被调用  
 
 ```typescript
 const processComponent = (
@@ -63,14 +80,15 @@ const processComponent = (
 ```  
 
 # mountComponent  
-这个函数用来挂载组件，主要做三件事  
+这个函数用来挂载组件，主要做这件事  
 1. 创建组件实例  
-2. 安装组件  
-3. 设置更新函数  
+2. 安装组件（ 对于状态组件和函数组件有不同的处理方式 ）  
+3. 处理异步组件  
+4. 设置组件更新函数  
 
 ```typescript
 const mountComponent: MountComponentFn = (
-    initialVNode,       // 组件的 vnode
+    initialVNode,       // 挂载组件的 vnode
     container,          // 父节点
     anchor,
     parentComponent,    // 父组件实例
@@ -85,8 +103,7 @@ const mountComponent: MountComponentFn = (
         parentSuspense
     ))
 
-    // 处理 keepAlive
-    // inject renderer internals for keepAlive
+    // 处理 keepAlive 组件
     if (isKeepAlive(initialVNode)) {
         ;(instance.ctx as KeepAliveContext).renderer = internals
     }
@@ -107,7 +124,7 @@ const mountComponent: MountComponentFn = (
         return
     }
 
-    // 这是组件的渲染函数
+    // 设置组件的更新函数
     setupRenderEffect(
         instance,
         initialVNode,
@@ -121,6 +138,7 @@ const mountComponent: MountComponentFn = (
 ```  
 
 ## createComponentInstance  
+每个组件都会对应一个实例对象，记录着组件的所有信息。组件的 `vnode` 以及实例对象会相互关联，`vnode.component` 会指向实例，而 `实例.vnode` 会指向 `vnode` 对象  
 
 ```typescript
 // 组件索引，每次创建一个组件会 + 1
@@ -131,7 +149,7 @@ export function createComponentInstance(
   parent: ComponentInternalInstance | null,     // 父组件实例
   suspense: SuspenseBoundary | null
 ) {
-    // 组件对象
+    // 获取组件对象
     const type = vnode.type as ConcreteComponent
     
     // 每个组件继承父组件的 appContext，如果是根组件，则从 vnode 上获取，根节点的 vnode 会在 mount 时挂载 appContext
@@ -146,9 +164,9 @@ export function createComponentInstance(
         appContext,
         root: null!,      // 根组件实例
         next: null,
-        subTree: null!,   // 组件的子节点 vnode
-        update: null!,    // 组件的更新函数
-        render: null,     // 组件的渲染函数
+        subTree: null!,   // 组件子节点的 vnode
+        update: null!,    // 组件的更新函数，更新整个组件的入口函数
+        render: null,     // 组件的渲染函数，也就是组件对象上的 render
         proxy: null,      // 对 ctx 的代理，代理 handler 是 PublicInstanceProxyHandlers
         withProxy: null,  // 对 ctx 的代理，并且只有当组件的 render 函数是由模板编译生成时才会设置，代理 handler 是 RuntimeCompiledPublicInstanceProxyHandlers
         effects: null,
@@ -157,7 +175,7 @@ export function createComponentInstance(
         accessCache: null!, // 缓存访问属性的来源，是 setupState、data、props 还是 ctx
         renderCache: [],
 
-        // local resovled assets
+        // 组件加载的自定义组件以及指令
         components: null,
         directives: null,
 
@@ -215,10 +233,19 @@ export function createComponentInstance(
 }
 ```   
 
-`props` 的解析函数 [normalizePropsOptions](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/ComponentProps.md#normalizepropsoptions) 有介绍  
+1. `proxy`  
+    这个属性在 [setupStatefulComponent](#setupStatefulComponent) 中会被设置为代理对象  
+    通过 `setup` 返回函数，以及组件对象上本身存在渲染函数这两种情况生成的 `render` 函数中，它的 `this` 指向以及第一个参数就是 `proxy` 属性，可以通过 `proxy` 来访问到组件上的一些属性，可以参考 [PublicInstanceProxyHandlers](#PublicInstanceProxyHandlers)
+2. `withProxy`  
+    这个属性在 [finishComponentSetup](#finishComponentSetup) 中会被设置为代理对象  
+    在组件的 `template` 中，我们可以直接访问状态值，此时会被 [RuntimeCompiledPublicInstanceProxyHandlers](#RuntimeCompiledPublicInstanceProxyHandlers) 拦截，从而访问到具体的值   
+3. `propsOptions`  
+    通过 [normalizePropsOptions](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/props/README.md#normalizePropsOptions) 函数处理组件的 `props`  
+4. `emitsOptions`  
+    通过 [normalizeEmitsOptions](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/emits/README.md#normalizeemitsoptions) 函数处理组件的 `emits`  
 
 ## setupComponent  
-注册组件，初始化 `props`、`slots`，如果是状态组件，则再处理组件内部的逻辑，如果是函数组件，则什么也不会做  
+安装组件，初始化 `props`、`slots`，如果是状态组件，则会再处理状态组件内部的逻辑，如果是函数组件，则什么也不会做  
 
 ```typescript
 export function setupComponent(
@@ -248,11 +275,10 @@ export function setupComponent(
 }
 ```  
 
-初始化 `props` 的函数 [initProps](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/ComponentProps.md#initprops) 在这里有介绍  
-初始化 `slots` 的函数 [initSlots](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/ComponentSlots.md#initSlots) 在这里有介绍  
+通过 [initProps](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/props/README.md#initprops) 对组件的 `props` 进行初始化  
 
 ## setupStatefulComponent  
-注册状态组件，主要就是调用 `setup` 函数并处理返回结果  
+安装状态组件，主要就是调用 `setup` 函数并处理返回结果  
 
 ```typescript
 function setupStatefulComponent(
@@ -271,8 +297,8 @@ function setupStatefulComponent(
     const { setup } = Component
     if (setup) {
         // 创建 setup 函数的参数，并挂载在 instance.setupContext 上
-        const setupContext = (instance.setupContext = ?
-            createSetupContext(instance)
+        const setupContext = (instance.setupContext =
+            ? createSetupContext(instance)
             : null
         )
 
@@ -292,8 +318,9 @@ function setupStatefulComponent(
         resetTracking()
         currentInstance = null
 
-        // 检测 setup 返回值是否 Promise
+        // 检测 setup 返回值
         if (isPromise(setupResult)) {
+            // setup 返回 Promise
             if (isSSR) {
                 // return the promise so server-renderer can wait on it
                 return setupResult.then((resolvedResult: unknown) => {
@@ -336,7 +363,7 @@ function createSetupContext(instance: ComponentInternalInstance): SetupContext {
 ```
 
 ## handleSetupResult  
-`setup` 的返回值有两种类型  
+这个函数用来处理 `setup` 的返回值，总共有两种类型  
 1. 函数: 将作为组件的 `render` 渲染函数  
 2. 对象: 将作为组件的 `setupState` 状态  
 
@@ -359,12 +386,18 @@ export function handleSetupResult(
 }
 ```  
 
-**如果 setup 返回对象作为状态时，实际会被代理，而代理lan**
+**如果 setup 返回对象作为状态时，实际会被代理拦截**
 
 ## finishComponentSetup  
-这个函数用来设置组件实例的渲染函数 `render`，在渲染节点的时候调用的是组件实例上的渲染函数 `render`  
-* 如果组件实例上不存在 `render`，那么就会从组件对象上获取（ 通过模板生成或者本身就存在渲染函数 ）  
-* 如果组件实例上存在 `render`，那么就是 `setup` 返回了函数，在 [handleSetupResult](#handleSetupResult) 就已经将 `render` 挂载在组件实例上了  
+组件对象上 `render` 的来源  
+1. 组件对象存在 `template`，经过编译会将其转换为渲染函数，并挂载在组件对象的 `render` 上  2
+2. 组件对象本身就存在 `render` 渲染函数  
+
+组件实例上 `render` 的来源  
+1. 来源于组件对象上的 `render`  
+2. 来源于 `setup` 返回的函数  
+
+这个函数用来设置组件实例上的渲染函数 `render`，因为 `render` 的来源有很多，所以会统一挂载在组件实例上  
 
 ```typescript
 function finishComponentSetup(
@@ -416,9 +449,9 @@ function finishComponentSetup(
 ```  
 
 ## setupRenderEffect   
-每个组件实例上存在一个 `update` 属性，它是组件的更新函数，会执行组件的渲染函数 `render`，将结果挂载到真实节点上，并且会在特定时期，执行钩子函数  
+每个组件实例上存在一个 `update` 属性，它是组件的更新函数，会执行组件的渲染函数 `render`，将结果挂载到真实节点上，所以不管是挂载还是更新都会执行组件的 `update` 函数   
 
-`update` 实际上是一个 [effect](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/effect/README.md#effect) 对象，而真正更新的逻辑是放在回调里的  
+`update` 实际上是一个 [effect](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/effect/README.md#effect) 对象，因为需要追踪状态值，当状态发生变化时更新组件  
 
 ```typescript
 const setupRenderEffect: SetupRenderEffectFn = (
@@ -456,12 +489,12 @@ if (!instance.isMounted) {
     const { el, props } = initialVNode
     const { bm, m, parent } = instance
 
-    // 处理组件的 beforeMount 钩子，这里是同步执行
+    // 同步执行组件的 beforeMount 钩子函数
     if (bm) {
         invokeArrayFns(bm)
     }
 
-    // 处理 vnode 的 beforeMount 钩子，这里是同步执行
+    // 同步执行处理组件 vnode 的 beforeMount 钩子函数
     if ((vnodeHook = props && props.onVnodeBeforeMount)) {
         invokeVNodeHook(vnodeHook, parent, initialVNode)
     }
@@ -481,19 +514,18 @@ if (!instance.isMounted) {
         )
     } else {
         // 客户端渲染
-        // 对子节点开始处理，从 patch 开始
+        // 对子节点开始处理
         patch(
-            null,       // 这里是挂载，所以旧节点写死为 null
+            null,       // 挂载
             subTree,    
-            container,  // 将 subTree 挂载到 container 上
+            container,  // 容器节点，将 subTree 挂载到里面
             anchor,   
-            instance,   // 当前组件作为子节点的父组件
+            instance,   // 当前组件作为子 vnode 的父组件
             parentSuspense,
             isSVG
         )
 
-        // 这里已经将所有的子节点都创建完成
-        // 将子节点的真实节点 el 挂载在组件上，组件 vnode 的 el 就是子节点的 el
+        // 这里已经将所有的子节点都创建完成，并挂载在容器里，将组件的 vnode.el 指向子 vnode 的 el
         initialVNode.el = subTree.el
     }
 
@@ -502,7 +534,7 @@ if (!instance.isMounted) {
         queuePostRenderEffect(m, parentSuspense)
     }
 
-    // 处理 vnode 的 onMounted 钩子，这里不会立即执行，而是将其放在队列中，等到下一轮微任务再去执行队列
+    // 处理组件 vnode 的 onMounted 钩子，这里不会立即执行，而是将其放在队列中，等到下一轮微任务再去执行队列
     if ((vnodeHook = props && props.onVnodeMounted)) {
         queuePostRenderEffect(() => {
             invokeVNodeHook(vnodeHook!, parent, initialVNode)

@@ -2,7 +2,7 @@
 
 <!-- TOC -->
 
-- [源码中会用到的工具函数](#源码中会用到的工具函数)
+- [用到的其他模块函数](#用到的其他模块函数)
 - [初始化 props](#初始化-props)
     - [normalizePropsOptions](#normalizepropsoptions)
     - [BooleanFlags](#booleanflags)
@@ -20,15 +20,16 @@
 
 <!-- /TOC -->
 
-# 源码中会用到的工具函数  
+# 用到的其他模块函数  
 1. [def](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#def)
 2. [camelize](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#camelize)  
-2. [hyphenate](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#hyphenate)  
+3. [hyphenate](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#hyphenate)  
+4. [isEmitListener](https://github.com/linhaotxl/frontend/tree/master/packages/vue/shared#hyphenate)  
 
 # 初始化 props  
 
 ## normalizePropsOptions  
-每个组件定义的 `props` 格式会有多种，可以是数组，对象，例如下面这几种  
+每个组件对象定义的 `props` 格式会有多种，可以是数组，对象，例如下面这几种  
 
 ```typescript
 const Comp1 = {
@@ -47,12 +48,12 @@ const Comp2 = {
 ```  
 
 所以这个函数的作用就是将 `props` 进行统一的格式处理，转换结果是一个数组，包含两个数据  
-1. 配置对象，将每个 `prop` 转换为同样对象  
+1. 配置对象，将每个 `prop` 转换为同样对象，格式为 `{ type: 类型, default: 默认值 }`  
 2. 需要处理的 `prop` 名称集合，以下两种情况会对其处理  
     * 存在默认值 `default`  
     * `prop` 的值出现 `Boolean` 的情况，因为 `Boolean` 会有额外的处理，后面会看到  
 
-这个过程发生在创建组件实例的过程中，并将转换结果挂载在示例的 `propsOptions` 上  
+这个过程发生在创建组件实例 [createComponentInstance](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#createcomponentinstance) 的过程中，并将转换结果挂载在实例的 `propsOptions` 上  
 
 ```typescript
 export function createComponentInstance(
@@ -87,7 +88,7 @@ export function normalizePropsOptions(
     asMixin = false
 ): NormalizedPropsOptions | [] {
     const appId = appContext.app ? appContext.app._uid : -1
-    // 获取组件上的 __props，如果是第一次不存在，则会设置一个空对象
+    // 获取组件对象上的 __props，如果是第一次则不存在，会设置一个空对象
     const cache = comp.__props || (comp.__props = {})
     // 根据 appId 查找是否有缓存，在第一次转换时，会将转换结果挂载到 comp.__props[ appId ] 上
     const cached = cache[appId]
@@ -98,11 +99,13 @@ export function normalizePropsOptions(
 
     // 获取组件需要接受的 props
     const raw = comp.props
-    // 定义转换结果的 配置对象 和 需要转换的 `props` 名称集合
+    // 定义转换结果的 配置对象 和 需要转换的 props 名称集合
     const normalized: NormalizedPropsOptions[0] = {}
     const needCastKeys: NormalizedPropsOptions[1] = []
 
     let hasExtends = false
+
+    // 组件上没有定义 props，直接返回空数组
     if (!raw && !hasExtends) {
         return (cache[appId] = EMPTY_ARR)
     }
@@ -110,7 +113,7 @@ export function normalizePropsOptions(
     // 处理 props
     if (isArray(raw)) {
         // props 为数组
-        // 遍历 props 数组，将每个 ”属性名“ 转换为驼峰，并以 key 存储在 normalized 中，value 为空对象
+        // 遍历 props 数组，将每个 ”属性名“ 转换为驼峰形式，并以 key 存储在 normalized 中，value 为空对象
         for (let i = 0; i < raw.length; i++) {
             // 当 props 为数组时，里面的元素必须是字符串
             if (__DEV__ && !isString(raw[i])) {
@@ -189,12 +192,12 @@ const enum BooleanFlags {
 }
 ```  
 
-* `shouldCast` 表示是否存在 `Boolean` 的属性  
+* `shouldCast` 表示是否需要转换，在 [normalizePropsOptions](#normalizePropsOptions) 中可以看到只有存在 `Boolean` 才会为 `true`  
 * `shouldCastTrue` 表示是否需要将属性的值转换为 `true`  
 
 ## initProps  
 在上一步创建好配置对象后，接下来就会通过 `initProps` 进行初始化  
-`initProps` 只会在第一次安装组件的时候执行，也就是 [setupComponent](https://github.com/linhaotxl/frontend/tree/master/packages/vue/runtime-core/component#setupComponent) 里会执行一次  
+`initProps` 只会在第一次安装组件的时候执行，也就是 [setupComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupcomponent) 里会执行一次  
 
 <!-- 实现流程：
 1. 对于每一个组件来说，都可以定义需要接受的 `props`，然后会遍历我们实际传递的 `props`，检测实际传递的是否存在于组件声明中的，如果存在，会放入组件实例的 `props` 中，否则会放入组价实例的 `attrs` 中  
@@ -228,7 +231,7 @@ export function initProps(
     const options = instance.type.props
 
     if (isStateful) {
-        // 状态组件，将 props 挂载到组件实例的 props 上
+        // 如果是状态组件且在客户端渲染，会将 props 做一层代理，挂载到组件实例的 props 上
         instance.props = isSSR ? props : shallowReactive(props)
     } else {
         // 函数组件
@@ -248,8 +251,8 @@ export function initProps(
 
 ## setFullProps  
 这个函数主要做两件事  
-1. 将实际传递的 `props` 分类，如果组件需要接受，就放入 `props` 对象中，否则就放入 `attrs` 对象中  
-2. 对需要处理的 `prop` 进行处理，也就是之前生成的 `needCastKeys` 集合中的 `prop`  
+1. 处理实际传递的 `props`，如果是组件需要接受的，就放入组件实例的 `props` 对象中，否则就放入 `attrs` 对象中  
+2. 对需要处理的 `props` 进行处理，也就是之前生成的 `needCastKeys` 集合中的 `props`  
 
 ```typescript
 /**
@@ -269,7 +272,7 @@ function setFullProps(
 
     // 检测使用组件的时候，是否传递了 props
     if ( rawProps ) {
-        // 遍历标签上的 props
+        // 遍历实际传入的所有 props
         for (const key in rawProps) {
             const value = rawProps[key]
             
@@ -285,7 +288,7 @@ function setFullProps(
                 // 存在放入组件实例的 props 中
                 props[camelKey] = value
             }
-            // 不存在的话，就会检测是否是声明的 emits，如果不是再回放入 attrs 中，注意这里存放的并不是 camel-case 形式，而是原始的 key
+            // 不存在的话，就会检测是否是组件对象上声明的 emits，如果不是就会放入 attrs 中，注意这里存放的并不是 camel-case 形式，而是原始的 key
             else if (!isEmitListener(instance.emitsOptions, key)) {
                 attrs[key] = value
             }
@@ -323,7 +326,7 @@ function setFullProps(
 ```typescript
 /**
  * @param { NormalizedPropsOptions[0] } options 组件的配置对象
- * @param { Data }                      props   组件实例上的 props
+ * @param { Data }                      props   组件实例上的 props 属性
  * @param { string }                    key     待处理的属性名，这肯定是一个 camel-case 的形式
  * @param { unknown }                   value   处理前的值
  */
@@ -334,13 +337,17 @@ function resolvePropValue(
   value: unknown,
   instance: ComponentInternalInstance
 ) {
+    // 获取 key 对应 prop 的配置对象
     const opt = options[key]
     if (opt != null) {
+        // 检测是否存在默认值
         const hasDefault = hasOwn(opt, 'default')
 
+        // 检测是否提供了这个 prop
         if (hasDefault && value === undefined) {
-            // 处理 default value
+            // 没有，处理 default value
             const defaultValue = opt.default
+            // 当 props 定义的类型不是 Function 时，才会去执行 defaultValue
             if (opt.type !== Function && isFunction(defaultValue)) {
                 setCurrentInstance(instance)
                 value = defaultValue(props)
@@ -373,6 +380,8 @@ function resolvePropValue(
 }
 ```  
 
+**可以看到，如果 `default` 是函数的话，那么在它执行期间，`currentInstance` 就是当前组件实例**
+
 关于 `Boolean` 的转换可以参考示例 [Boolean转换](#Boolean转换)  
 
 # 更新 props  
@@ -385,8 +394,8 @@ function resolvePropValue(
 ```typescript
 /**
  * @param { ComponentInternalInstance } instance  组件实例
- * @param { Data | null }               rawProps  新的原始 props
- * @param { Data | null }               rawProps  旧的原始 props
+ * @param { Data | null }               rawProps  最新传递进来的 props
+ * @param { Data | null }               rawProps  上一次传递进来的 props
  * @param { boolean }                   optimized 是否使用优化
  */
 function updateProps(
@@ -403,8 +412,13 @@ function updateProps(
         vnode: { patchFlag }
     } = instance
     const rawCurrentProps = toRaw(props)
+
+    // 获取 props 配置对象
     const [options] = instance.propsOptions
     
+    // 优化更新要满足下面的三个条件
+    // 1. 当前处于优化模式，或者 patchFlag > 0
+    // 2. patchFlag 不能为 FULL_PROPS，这种情况需要全量更新
     if (
         !(__DEV__ && instance.type.__hmrId) &&
         (optimized || patchFlag > 0) &&
@@ -412,13 +426,11 @@ function updateProps(
     ) {
         // 优化更新
         if (patchFlag & PatchFlags.PROPS) {
-            // Compiler-generated props & no keys change, just set the updated
             // the props.
             // 从 vnode 上获取动态的 props 遍历
             const propsToUpdate = instance.vnode.dynamicProps!
             for (let i = 0; i < propsToUpdate.length; i++) {
                 const key = propsToUpdate[i]
-                // PROPS flag guarantees rawProps to be non-null
                 const value = rawProps![key]
                 if (options) {
                     // 组价上存在 props 选项
@@ -455,7 +467,7 @@ function updateProps(
             // 什么时候需要重置和移除？分为两种情况
             // 不存在新的 props，这时候需要对所有的 props 进行删除或重置
             // 存在新的 props
-            //  1. prop 为普通值，例如 name，如果在最新的 props 里没有这个值，就会被重置或删除
+            //  1. prop 为普通值，例如 name，如果在最新的 props 里没有这个值，说明是旧的，就会被重置或删除
             //  2. prop 不是普通值，例如 max-age、maxAge，如果在最新的 props 里都没有 camel-case 和 kabab-case，就会被重置或移除
             if (
                 // 不存在新的 props，直接进入 if 进行处理

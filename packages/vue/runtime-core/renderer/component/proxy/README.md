@@ -5,21 +5,24 @@
 - [源码中用到的工具函数](#源码中用到的工具函数)
 - [AccessTypes](#accesstypes)
 - [accessCache](#accesscache)
-- [PublicInstanceProxyHandlers](#publicinstanceproxyhandlers)
+- [proxy](#proxy)
     - [publicPropertiesMap](#publicpropertiesmap)
     - [PublicInstanceProxyHandlers.get](#publicinstanceproxyhandlersget)
     - [PublicInstanceProxyHandlers.set](#publicinstanceproxyhandlersset)
     - [PublicInstanceProxyHandlers.has](#publicinstanceproxyhandlershas)
 - [示例](#示例)
     - [getter 和 setter](#getter-和-setter)
+    - [示例二](#示例二)
 - [RuntimeCompiledPublicInstanceProxyHandlers](#runtimecompiledpublicinstanceproxyhandlers)
-    - [RuntimeCompiledPublicInstanceProxyHandlers.get](#runtimecompiledpublicinstanceproxyhandlersget)
     - [RuntimeCompiledPublicInstanceProxyHandlers.has](#runtimecompiledpublicinstanceproxyhandlershas)
+    - [RuntimeCompiledPublicInstanceProxyHandlers.get](#runtimecompiledpublicinstanceproxyhandlersget)
 
 <!-- /TOC -->
 
 # 源码中用到的工具函数  
 1. [isGloballyWhitelisted](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#isGloballyWhitelisted)  
+1. [extend](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#extend)  
+1. [hasOwn](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#hasOwn)  
 
 # AccessTypes  
 当在组件的 `template` 或者 `render` 里使用某个属性时，会标记这个属性的来源，是来自于 `setupState` 还是 `props` 等，在源码中使用 `AccessTypes` 来标记不同的来源  
@@ -37,9 +40,9 @@ const enum AccessTypes {
 # accessCache  
 在每个组件实例上存在 `accessCache` 这个属性，它的类型是 `Record<string, AccessTypes>` 这样的对象，保存的 `key` 是具体访问的属性名，而 `value` 是这个属性的来源，当访问一个属性时，会先从 `accessCache` 中查找是否记录了来源，如果有，则直接从指定的来源中获取数据，如果没有，则依次从不同的来源中查找  
 
-# PublicInstanceProxyHandlers  
+# proxy  
 
-在组件实例上存在属性 `ctx`，其中存在 `_` 属性，并指向自身实例  
+在组件实例上存在属性 `ctx`，其中的 `_` 属性，并指向自身实例  
 
 ```typescript
 export function createComponentInstance (
@@ -55,7 +58,7 @@ export function createComponentInstance (
 }
 ```  
 
-对于每一个状态组件会存在 `proxy` 属性，它对上面的 `ctx` 做了一个代理  
+对于每一个状态组件会存在 `proxy` 属性，它对上面的 `ctx` 做了一个代理，在 [setupStatefulComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent) 中设置  
 
 ```typescript
 function setupStatefulComponent(
@@ -72,7 +75,7 @@ function setupStatefulComponent(
 }
 ```
 
-这个 `proxy` 对象主要用于组件的 `render` 方法中，可以通过 `this` 来获取到其中的属性  
+这个 `proxy` 对象用于 `render` 方法中的 `this` 和第一个参数，参考 [renderComponentRoot](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/attrs/README.md#renderComponentRoot)，这样，当通过 `this` 或者第一个参数访问时，就会被 [PublicInstanceProxyHandlers.get](#PublicInstanceProxyHandlers.get) 拦截，从而获取正确来源的数据  
 
 ## publicPropertiesMap  
 这是内置属性的集合，当访问的是一个内置属性时，实际访问的就是下面集合中的对应值  
@@ -98,9 +101,13 @@ const publicPropertiesMap: PublicPropertiesMap = extend(Object.create(null), {
 
 ## PublicInstanceProxyHandlers.get  
 
-在 `render` 中通过 `this` 访问某个属性时，会被 `get` 拦截，从而确定属性具体的来源  
+拦截在组件实例上访问 `ctx` 的属性  
 
 ```typescript
+/**
+ * @param { ComponentRenderContext } 组件的 ctx 对象
+ * @param { string } key 被拦截的属性
+ */
 get({ _: instance }: ComponentRenderContext, key: string) {
     const {
         ctx,
@@ -126,13 +133,13 @@ get({ _: instance }: ComponentRenderContext, key: string) {
         if (n !== undefined) {
             switch (n) {
                 case AccessTypes.SETUP:
-                    return setupState[key]
+                    return setupState[key]  // 来源是 setupState，从 setupState 中获取数据并返回
                 case AccessTypes.DATA:
-                    return data[key]
+                    return data[key]        // 来源是 data，从 data 中获取数据并返回
                 case AccessTypes.CONTEXT:
-                    return ctx[key]
+                    return ctx[key]         // 来源是 ctx，从 ctx 中获取数据并返回
                 case AccessTypes.PROPS:
-                    return props![key]
+                    return props![key]      // 来源是 props，从 props 中获取数据并返回
                 // default: just fallthrough
             }
         } else if (setupState !== EMPTY_OBJ && hasOwn(setupState, key)) {
@@ -380,10 +387,14 @@ console.log( instanceProxy.global )     // global value
 '$store' in instanceProxy;  // true
 '$attrs' in instanceProxy;  // true
 'global' in instanceProxy;  // true
-```
+```  
+
+## 示例二  
+
+
 
 # RuntimeCompiledPublicInstanceProxyHandlers  
-通过 `template` 生成的 `render` 方法，组件上会存在 `withProxy` 属性，它也是对 `ctx` 的代理，只不过拦截对象不同  
+通过 `template` 生成的 `render` 方法，组件上会存在 `withProxy` 属性（ 参考 [finishComponentSetup](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#finishcomponentsetup) ），它也是对 `ctx` 的代理，只不过拦截对象不同  
 
 ```typescript
 function finishComponentSetup(
@@ -402,7 +413,7 @@ function finishComponentSetup(
 }
 ```  
 
-`RuntimeCompiledPublicInstanceProxyHandlers` 是基于 `PublicInstanceProxyHandlers` 的，只不过重写了 `get` 和 `has` 放方法，剩下的都一样  
+`RuntimeCompiledPublicInstanceProxyHandlers` 是基于 `PublicInstanceProxyHandlers` 的，只不过重写了 `get` 和 `has` 方法，`set` 是一样的  
 
 ```typescript
 export const RuntimeCompiledPublicInstanceProxyHandlers = extend(
@@ -417,9 +428,7 @@ export const RuntimeCompiledPublicInstanceProxyHandlers = extend(
         }
     }
 )
-```
-
-## RuntimeCompiledPublicInstanceProxyHandlers.get  
+```  
 
 在这之前首先要了解 `Symbol.unscopables` 的作用  
 可以为任何对象定义 `Symbol.unscopables` 属性，它的值是一个对象，里面包含的是每个属性是否需要排除 `with` 环境  
@@ -445,9 +454,10 @@ with( obj ) {
 更改这个示例，加上代理对象  
 
 ```typescript
+const baz = 3;
 const obj = { 
     foo: 1, 
-    bar: 2 
+    bar: 2,
 };
 
 obj[Symbol.unscopables] = { 
@@ -457,38 +467,43 @@ obj[Symbol.unscopables] = {
 
 const proxy = new Proxy( obj, {
     get ( target, key, reciver ) {
-        console.log( 'key is -> ', key )
+        console.log( 'get: key is -> ', key )
         return Reflect.get( target, key, reciver )
+    },
+    has ( target, property ) {
+        console.log( 'has: key is -> ', property )
+        return property === 'baz' ? false : Reflect.has( target, property )
     }
 })
 
 with( proxy ) {
-    console.log(foo); // 1，相当于 obj.foo
-    console.log(bar); // ReferenceError: bar is not defined，相当于 bar
+    foo;    // 1，相当于 obj.foo
+    baz;    // 3
+    bar;    // ReferenceError: bar is not defined，相当于 bar
 }
 
 // 输出
-// key is ->  Symbol(Symbol.unscopables)
-// key is ->  foo
-// key is ->  Symbol(Symbol.unscopables)
+// has: key is ->  foo
+// get: key is ->  Symbol(Symbol.unscopables)
+// get: key is ->  foo
+// has: key is ->  baz
+// has: key is ->  bar
+// Uncaught ReferenceError: bar is not defined
 ```  
 
-可以看出，在 `with` 语句中访问属性时，首先会查找环境的 `Symbol.unscopables` 对象，来判断访问的属性是否排除了 `with` 语句，如果没排除，则再一次访问确定的属性，如果排除了，就不会再访问了  
+可以看出，在 `with` 语句中访问属性时，首先会查找是否存在于 `with` 环境中（ 被 `has` 拦截 ）  
+ * 如果存在，则会查找 `Symbol.unscopables` 对象，来判断访问的属性是否排除了 `with` 语句  
+    * 如果排除了，则访问就不再继续  
+    * 如果没被排除，则会继续访问指定的属性值   
+ * 如果不存在，则会再向上一层作用域中查找，找不到就会报错  
 
-所以在 `RuntimeCompiledPublicInstanceProxyHandlers.get` 中，如果当前访问的是 `Symbol.unscopables` 就会直接过滤掉，什么也不做，如果访问的属性没有被排除，那么会再次触发 `get`，而这一次会通过 [PublicInstanceProxyHandlers.get](#PublicInstanceProxyHandlers.get) 来获取到最终的值，和之前的逻辑一样  
+这个示例会在下面用到  
 
-```typescript
-get( target: ComponentRenderContext, key: string ) {
-    // fast path for unscopables when using `with` block
-    if ((key as any) === Symbol.unscopables) {
-        return
-    }
-    return PublicInstanceProxyHandlers.get!(target, key, target)
-}
+```html
+<div>{{ String('Hello World!') }}</div>
 ```  
 
-## RuntimeCompiledPublicInstanceProxyHandlers.has   
-在 `template` 生成的 `render` 中，只会存在一种情况会被 `has` 拦截，下面这是一个由 `<div>{{ String('Hello World!') }}</div>` 生成的 `render` 函数  
+这个模板会被编译为  
 
 ```typescript
 const _Vue = Vue
@@ -502,10 +517,10 @@ return function render(_ctx, _cache, $props, $setup, $data, $options) {
 }
 ```  
 
-当访问 `_Vue` 和 `String` 的时候，因为当前在 `with` 的环境中，所以会先去查找是否存在于 `_ctx`，就会被 `has` 拦截  
-只有两种情况会被认为不在 `_ctx` 的作用域中  
-1. 内置变量，以 `_` 开头  
-2. `JS` 的内置对象，`String`、`Number` 等  
+## RuntimeCompiledPublicInstanceProxyHandlers.has   
+`has` 认为有两种情况是不存在于 `with` 环境中的  
+1. `Vue` 内置变量，以 `_` 开头  
+2. `JS` 的全局内置对象，`String`、`Number` 等  
 
 ```typescript
 has( _: ComponentRenderContext, key: string ) {
@@ -521,4 +536,64 @@ has( _: ComponentRenderContext, key: string ) {
 }
 ```  
 
-[isGloballyWhitelisted](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#isGloballyWhitelisted) 是全局变量的白名单集合，通过它来检测是否是全局对象  
+上面示例在访问 `_Vue` 和 `String` 时，由于他们被 `has` 拦截都无法通过，所以只会往上一层的作用域中找到，分别找到了局部变量 `_Vue` 和全局对象 `String`   
+
+[isGloballyWhitelisted](#isGloballyWhitelisted) 就是全局对象的集合  
+
+## RuntimeCompiledPublicInstanceProxyHandlers.get  
+
+修改上面的示例，如果 `get` 拦截到的是 `Symbol.unscopables` 则什么也不会做  
+
+```typescript
+const baz = 3;
+const obj = { 
+    foo: 1, 
+    bar: 2,
+};
+
+obj[Symbol.unscopables] = { 
+    foo: false, // foo 属性需要在 with 环境中
+    bar: true   // bar 属性不需要再 with 环境中
+};
+
+const proxy = new Proxy( obj, {
+    get ( target, key, reciver ) {
+        console.log( 'get: key is -> ', key )
+        return key === Symbol.unscopables ? undefined : Reflect.get( target, key, reciver )
+        // return Reflect.get( target, key, reciver )
+    },
+    has ( target, property ) {
+        console.log( 'has: key is -> ', property )
+        return property === 'baz' ? false : Reflect.has( target, property )
+    }
+})
+
+with( proxy ) {
+    foo;    // 1，相当于 obj.foo
+    baz;    // 3
+    bar;    // 2，相当于 obj.bar
+}
+
+// 打印
+// has: key is ->  foo
+// get: key is ->  Symbol(Symbol.unscopables)
+// get: key is ->  foo
+// has: key is ->  baz
+// has: key is ->  bar
+// get: key is ->  Symbol(Symbol.unscopables)
+// get: key is ->  bar
+```  
+
+可以看到，即使 `bar` 排除了 `with` 环境，但依然能够获取到，因为在这个示例中，相当于重写了 `Symbol.unscopables` 的行为，导致它什么也不会做，而之前的示例中依然是默认行为 `Reflect.get( target, key, reciver )`，所以在这个示例中，`Symbol.unscopables` 已经没有任何的作用了  
+
+`get` 的行为和上面类似，重写了 `Symbol.unscopables` 的默认行为，能进入到 `get` 中说明已经通过了 [has](#RuntimeCompiledPublicInstanceProxyHandlers.has)，所以接下来只需要再一次从 [PublicInstanceProxyHandlers.get](#PublicInstanceProxyHandlers.get) 获取数据即可，逻辑和之前一样  
+
+```typescript
+get( target: ComponentRenderContext, key: string ) {
+    // fast path for unscopables when using `with` block
+    if ((key as any) === Symbol.unscopables) {
+        return
+    }
+    return PublicInstanceProxyHandlers.get!(target, key, target)
+}
+```  

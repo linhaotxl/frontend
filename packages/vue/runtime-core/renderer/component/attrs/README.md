@@ -3,7 +3,7 @@
 <!-- TOC -->
 
 - [其他模块用到的函数](#其他模块用到的函数)
-- [渲染组件子节点](#渲染组件子节点)
+- [renderComponentRoot](#rendercomponentroot)
     - [getFunctionalFallthrough](#getfunctionalfallthrough)
     - [filterModelListeners](#filtermodellisteners)
 - [示例](#示例)
@@ -17,7 +17,7 @@
 2. [isOn](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#isOn)
 2. [cloneVNode](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#cloneVNode)
 
-# 渲染组件子节点  
+# renderComponentRoot  
 这个函数主要做两件事  
 1. 调用组件实例的 `render` 方法，生成子 `vnode`  
 2. 处理组件的属性透传  

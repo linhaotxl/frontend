@@ -1,1 +1,0 @@
-export default class FetcherResponse extends Response {}

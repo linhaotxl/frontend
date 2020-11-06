@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "watch": "nodemon --config ./nodemon.json"
+    "test": "jest",
+    "watch": "nodemon --config ./nodemon.json",
+    "dev": "webpack"
   },
   "keywords": [],
   "author": "",
@@ -13,9 +14,16 @@
   "dependencies": {
     "nodemon": "^2.0.2",
     "ts-node": "^8.8.1",
-    "typescript": "^3.8.3"
+    "typescript": "^3.8.3",
+    "webpack": "^4.43.0"
   },
   "devDependencies": {
-    "promises-aplus-tests": "^2.1.2"
+    "@types/jest": "^25.2.1",
+    "jest": "^25.4.0",
+    "matcha": "^0.7.0",
+    "promises-aplus-tests": "^2.1.2",
+    "ts-jest": "^25.4.0",
+    "ts-node": "^8.10.1",
+    "typescript": "^3.9.2"
   }
 }

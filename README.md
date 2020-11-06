@@ -36,13 +36,14 @@
         * [组件 attrs 的处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/attrs/README.md)  
         * [组件 emits 的处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/emits/README.md)  
         * [组件 proxy 的处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/proxy/README.md)  
-        * [组件更新过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/proxy/README.md)  
+        * [组件 slots 的处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/slots/README.md)  
+        * [组件更新过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/update/README.md)  
         * [组件 inject/provide 注入](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/inject/README.md)  
         * [组件 ref 处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/ref/README.md)  
 
     3. 元素的渲染  
         * [元素初始化过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/initial/README.md)
-        * [处理 children](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md)
         * [元素更新过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md)
+        * [处理 children](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md)
 
     4. [Fragment 的渲染](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/fragment/README.md)

@@ -19,7 +19,7 @@
 1. [queuePostRenderEffect](#queuePostRenderEffect)  
 
 # 优化模式  
-1. 在创建元素节点时，如果存在子 `children`，且存在动态子 `children`，则使用优化模式  
+1. 在创建元素节点 [mountChildren](#mountchildren) 时，如果存在子 `children`，且存在动态子 `children`，则使用优化模式  
 
 # anchor  
 1. 在挂载子 `children` 的时候，会将 `anchor` 传递为 `null`，保证挂载的顺序和 `children` 是一致的  
@@ -63,16 +63,17 @@ const processElement = (
 
 ```typescript
 const mountElement = (
-    vnode: VNode,
-    container: RendererElement,
-    anchor: RendererNode | null,
-    parentComponent: ComponentInternalInstance | null,
+    vnode: VNode,                                       // 需要挂载的 vnode 
+    container: RendererElement,                         // 父节点，会将 vnode 挂载至 container 中
+    anchor: RendererNode | null,                        // 兄弟节点，会将 vnode 挂载至 anchor 前一个
+    parentComponent: ComponentInternalInstance | null,  // 父组件，当前 vnode 所在的组件实例
     parentSuspense: SuspenseBoundary | null,
     isSVG: boolean,
-    optimized: boolean
+    optimized: boolean                                  // 是否优化模式
 ) => {
     let el: RendererElement                     // 保存 vnode 对应的真实 DOM 节点
-    let vnodeHook: VNodeHook | undefined | null // 保存 vnode 上的 hooks
+    let vnodeHook: VNodeHook | undefined | null // 保存 vnode 上的各个生命周期钩子
+    
     const {
         type,
         props,
@@ -83,6 +84,7 @@ const mountElement = (
         dirs
     } = vnode
 
+    // 1. 创建真实 DOM 节点
     if (
         !__DEV__ &&
         vnode.el &&
@@ -95,38 +97,37 @@ const mountElement = (
         // only do this in production since cloned trees cannot be HMR updated.
         el = vnode.el = hostCloneNode(vnode.el)
     } else {
-        // 创建真实 DOM 节点并挂载到 vnode 的 el 上
+        // ①. 创建真实 DOM 节点并挂载到 vnode 的 el 上
         el = vnode.el = hostCreateElement(
             vnode.type as string,
             isSVG,
             props && props.is
         )
 
-        // 处理子节点
+        // ②. 处理子节点
         if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
-            // 子节点为文本节点，例如 <span>hello</span>
-            // 设置 DOM 节点的子节点
+            // 子节点为文本节点，例如 <span>hello</span>，直接设置上面创建节点的内容
             hostSetElementText(el, vnode.children as string)
         } else if (shapeFlag & ShapeFlags.ARRAY_CHILDREN) {
             // 子节点为数组，例如 <div><span>hello</span></div>
-            // 挂载所有的子节点到新创建的 el DOM 节点上
+            // 挂载所有的子节点到新创建的 el 节点上
             mountChildren(
-                vnode.children as VNodeArrayChildren,   // 所有的子 children
-                el,                                     // 容器节点为新创建的节点，会将所有的子 children 挂载到 el 上
+                vnode.children as VNodeArrayChildren,   // 子 children
+                el,                                     // 容器节点为新创建的 el 节点，会将所有的 children 挂载到 el 上
                 null,                                   // 兄弟节点为 null，挂载的时候按照 children 顺序增加
                 parentComponent,
                 parentSuspense,
                 isSVG && type !== 'foreignObject',
-                optimized || !!vnode.dynamicChildren    // 如果存在需要追踪的动态子节点，则使用优化策略
+                optimized || !!vnode.dynamicChildren    // TODO: 如果存在需要追踪的动态子节点，则使用优化策略
             )
         }
 
-        // 同步执行指令的 created 钩子
+        // ③. 同步执行指令的 created 钩子
         if (dirs) {
             invokeDirectiveHook(vnode, null, parentComponent, 'created')
         }
         
-        // 处理 props
+        // ④. 处理 props
         if (props) {
             // 遍历所有的 props 并排除内置 prop，将 prop 设置到真实节点 el 上
             for (const key in props) {
@@ -151,15 +152,16 @@ const mountElement = (
             }
         }
         
-        // scopeId
+        // ⑤. scopeId
         setScopeId(el, scopeId, vnode, parentComponent)
     }
 
-    // 同步执行指令的 beforeMount 钩子
+    // 2. 同步执行指令的 beforeMount 钩子
     if (dirs) {
         invokeDirectiveHook(vnode, null, parentComponent, 'beforeMount')
     }
 
+    // 3. 
     // #1583 For inside suspense + suspense not resolved case, enter hook should call when suspense resolved
     // #1689 For inside suspense + suspense resolved case, just call it
     const needCallTransitionHooks =
@@ -170,10 +172,10 @@ const mountElement = (
         transition!.beforeEnter(el)
     }
 
-    // 已经处理完当前节点下的所有子节点和属性设置，所以可以将 el 插入到父节点 container 中，并插入在兄弟节点 anchor 之前
+    // 4. 已经处理完当前节点下的所有子节点和属性设置，所以可以将 el 插入到父节点 container 中，并插入在兄弟节点 anchor 之前
     hostInsert(el, container, anchor)
 
-    // 处理 vnode 的 mounted 钩子、指令的 mounted 钩子
+    // 5. 处理 vnode 的 mounted 钩子、指令的 mounted 钩子
     // 因为这些 钩子 都需要异步执行，所以会将它们放入异步队列中，等待下一轮微任务
     if (
         (vnodeHook = props && props.onVnodeMounted) ||
@@ -194,14 +196,14 @@ const mountElement = (
 
 ```typescript
 const mountChildren: MountChildrenFn = (
-    children,
-    container,
-    anchor,
-    parentComponent,
+    children,           // 需要挂载的 vnode 列表
+    container,          // 父节点，将每个 children 挂载至 container 里
+    anchor,             // 兄弟节点，将每个 children 挂载是 anchor 之前
+    parentComponent,    // 
     parentSuspense,
     isSVG,
-    optimized,
-    start = 0
+    optimized,          // 是否使用优化模式
+    start = 0           // 从 children 的 start 处位置开始挂载
 ) => {
     // 遍历所有的 children，对每一个 vnode 进行 patch 操作
     for ( let i = start; i < children.length; i++ ) {

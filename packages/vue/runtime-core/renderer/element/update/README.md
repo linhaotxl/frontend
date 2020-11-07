@@ -9,7 +9,10 @@
 
 <!-- /TOC -->
 
-# 其他模块的函数
+# 其他模块的函数  
+1. [invokeVNodeHook](#invokeVNodeHook)  
+2. [invokeDirectiveHook](#invokeDirectiveHook)  
+3. [queuePostRenderEffect](#queuePostRenderEffect)  
 
 # 优化模式  
 * 使用  
@@ -59,7 +62,7 @@ const patchElement = (
 
     // 5. 处理 props，检测 vnode 上是否有动态的 props
     if (patchFlag > 0) {
-        // 检测 props 中是否存在动态 key，如果存在，则需要对所有的 props 进行处理，因为无法知道这个 key 会如何改变
+        // 检测 props 中是否存在动态 key，如果存在，则需要对所有的 props 进行处理，因为无法 key 会如何改变
         if (patchFlag & PatchFlags.FULL_PROPS) {
             patchProps(
                 el,
@@ -120,7 +123,8 @@ const patchElement = (
             }
         }
     } else if (!optimized && dynamicChildren == null) { // TODO: 为什么非优化以及没有动态子节点不需要处理 props
-        // 不存在动态 key，也没有优化策略，也不存在动态子节点
+        // 如果当前处于优化模式，则不会去更新 props，因为不存在动态的 props 需要更新
+        // 如果当前不处于优化模式
         // 此时需要处理全部的 props
         patchProps(
             el,
@@ -152,7 +156,7 @@ const patchElement = (
             n1,
             n2,
             el,
-            null,   // TODO: 这里的兄弟节点为什么传 null
+            null,
             parentComponent,
             parentSuspense,
             areChildrenSVG
@@ -170,11 +174,19 @@ const patchElement = (
 }
 ```  
 
-**可以看到，在处理 `children` 时，如果当前处于优化模式，也没有动态子 `children` 时，是不会再去处理 `children` 的，处理完自身也就结束了**  
-**也就是说，从使用优化模式的 `vnode` 开始，只会处理动态的子 `children`，而不是全部，依次往下，一直到所有的动态子 `children` 都处理完**   
+注意：  
+1. 在处理 `children` 时，如果当前处于优化模式，也没有动态子 `children` 时，是不会再去处理 `children` 的，处理完自身也就结束了  
+    **也就是说，从使用优化模式的 `vnode` 开始，只会处理动态的子 `children`，而不是全部，依次往下，一直到所有的动态子 `children` 都处理完**  
+2. 如果处于非优化模式，就会调用 [patchChildren](#patchChildren) 处理全部的 `children`，这里的第四个参数兄弟节点传的是 `null`  
+    因为在 `patchChildren` 中存在挂载新节点的情况，它们分别是  
+     * 处理 `PatchFlags.KEYED_FRAGMENT` 的 `Fragment` 会使用 [patchKeyedChildren](#patchKeyedChildren)  
+     * 处理新老 `children` 都是数组时会使用 [patchKeyedChildren](#patchKeyedChildren)  
+     * 处理新 `children` 是数组，而老 `children` 不是数组时，会使用 [mountChildren](#mountChildren) 挂载新列表  
+     
+    在挂载新列表的情况下，需要按照 `children` 的顺序来挂载，所以是不需要 `anchor` 的，因此将它传递为 `null`  
 
 # patchProps  
-这个函数用来全量处理新老 `props` 的差异，并更新  
+这个函数用来全量处理新老 `props` 的差异，并更新到 DOM 节点  
 
 ```typescript
 const patchProps = (

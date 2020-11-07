@@ -118,7 +118,7 @@ const mountElement = (
                 parentComponent,
                 parentSuspense,
                 isSVG && type !== 'foreignObject',
-                optimized || !!vnode.dynamicChildren    // TODO: 如果存在需要追踪的动态子节点，则使用优化策略
+                optimized || !!vnode.dynamicChildren    // TODO: 这里唯一能用到地方就是组件里面
             )
         }
 
@@ -172,7 +172,8 @@ const mountElement = (
         transition!.beforeEnter(el)
     }
 
-    // 4. 已经处理完当前节点下的所有子节点和属性设置，所以可以将 el 插入到父节点 container 中，并插入在兄弟节点 anchor 之前
+    // 4. 将 el 插入到真实的 DOM 中，并处于 anchor 之前
+    //    此时，el 下的所有子节点均已创建成功，所以可以将 el 插入
     hostInsert(el, container, anchor)
 
     // 5. 处理 vnode 的 mounted 钩子、指令的 mounted 钩子

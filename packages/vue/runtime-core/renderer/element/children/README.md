@@ -2,16 +2,16 @@
 
 <!-- TOC -->
 
-- [优化模式](#优化模式)
-- [anchor](#anchor)
 - [patchChildren](#patchchildren)
 - [patchBlockChildren](#patchblockchildren)
-    - [示例](#示例)
-        - [Fragment](#fragment)
+- [patchUnkeyedChildren](#patchunkeyedchildren)
 - [patchKeyedChildren](#patchkeyedchildren)
     - [第一步: 处理头部相同的 vnode](#第一步-处理头部相同的-vnode)
     - [第二步: 处理尾部相同的 vnode](#第二步-处理尾部相同的-vnode)
     - [第三步 处理连续新增节点](#第三步-处理连续新增节点)
+        - [示例](#示例)
+            - [从中间插入](#从中间插入)
+            - [从尾部插入](#从尾部插入)
     - [第四步 处理连续删除节点](#第四步-处理连续删除节点)
     - [第五步 处理剩余情况( 移动，非连续的新增、删除 )](#第五步-处理剩余情况-移动非连续的新增删除-)
         - [keyToNewIndexMap](#keytonewindexmap)
@@ -26,13 +26,8 @@
 
 <!-- /TOC -->
 
-# 优化模式  
-1. 在更新节点时，如果存在动态 `children`，会使用优化模式  
-
-# anchor  
-
 # patchChildren  
-这个函数用来比较新老 `children` 的入口函数，会处理两种类型的节点   
+这个函数是用来比较新老 `children` 的入口函数，会处理两种类型的节点   
 1. `Fragment`：会对 `KEYED_FRAGMENT` 以及 `UNKEYED_FRAGMENT` 这两种 `Fragment` 特殊处理  
 2. 其他节点，`children` 无非就三种: 文本、数组以及 `null`，而这三种都是可以通过 [shapeFlag](#shapeFlag) 来区分的   
 
@@ -60,7 +55,7 @@ const patchChildren: PatchChildrenFn = (
     // 1. 处理 Fragment 的更新
     if (patchFlag > 0) {
         if (patchFlag & PatchFlags.KEYED_FRAGMENT) {
-            // KEYED_FRAGMENT 的 Fragment 使用 patchKeyedChildren 处理 children
+            // ①. KEYED_FRAGMENT 的 Fragment 使用 patchKeyedChildren 处理 children
             patchKeyedChildren(
                 c1 as VNode[],
                 c2 as VNodeArrayChildren,
@@ -73,7 +68,7 @@ const patchChildren: PatchChildrenFn = (
             )
             return
         } else if (patchFlag & PatchFlags.UNKEYED_FRAGMENT) {
-            // UNKEYED_FRAGMENT 的 Fragment 使用 patchUnkeyedChildren 处理 children
+            // ②. UNKEYED_FRAGMENT 的 Fragment 使用 patchUnkeyedChildren 处理 children
             patchUnkeyedChildren(
                 c1 as VNode[],
                 c2 as VNodeArrayChildren,
@@ -95,8 +90,7 @@ const patchChildren: PatchChildrenFn = (
         if (prevShapeFlag & ShapeFlags.ARRAY_CHILDREN) {
             // now: text
             // prev: array
-            // 之前是列表节点，需要将列表节点卸载
-            // 使用非优化，会将所有的子节点都卸载
+            // 之前是列表节点，需要将列表节点卸载，使用非优化，会将所有的子节点都卸载
             unmountChildren(c1 as VNode[], parentComponent, parentSuspense)
         }
 
@@ -183,6 +177,7 @@ const patchBlockChildren: PatchBlockChildrenFn = (
         const newVNode = newChildren[i] // 获取新节点
 
         // Determine the container (parent element) for the patch.
+        // TODO:
         const container =
             // - In the case of a Fragment, we need to provide the actual parent
             // of the Fragment itself so it can move its children.
@@ -198,7 +193,6 @@ const patchBlockChildren: PatchBlockChildrenFn = (
                 // just pass the block element here to avoid a DOM parentNode call.
                 fallbackContainer
 
-        // TODO: 为什么将 anchor 设置为 null
         patch(
             oldVNode,
             newVNode,
@@ -211,18 +205,83 @@ const patchBlockChildren: PatchBlockChildrenFn = (
         )
     }
 }
-```
+```  
 
-**注意，在 `patch` 每个动态节点时，会使用优化模式，这样的话，在 [patchElement](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md#patchElement) 中就只会处理动态 `children`，而不会再去处理全部的 `children`，从而达到优化目的**  
+注意：
+1. 在 `patch` 每个动态节点时，会使用优化模式，这样的话，在 [patchElement](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md#patchElement) 中就只会处理动态 `children`，而不是全部 `children`，从而达到优化目的  
+2. TODO: `patch` 的时候兄弟节点传的是 `null`，但是在 `patch` 的更新阶段中，这个 `anchor` 并没有被用到，只有在更新 `Suspense` 时会用到  
 
-## 示例  
-### Fragment  
+# patchUnkeyedChildren  
+这个函数专门处理 `UNKEYED_FRAGMENT` 的 `Fragment` 的 `children`  
 
-```html
-<div>
-    
-</div>
-```
+```typescript
+const patchUnkeyedChildren = (
+    c1: VNode[],
+    c2: VNodeArrayChildren,
+    container: RendererElement,
+    anchor: RendererNode | null,
+    parentComponent: ComponentInternalInstance | null,
+    parentSuspense: SuspenseBoundary | null,
+    isSVG: boolean,
+    optimized: boolean
+) => {
+    c1 = c1 || EMPTY_ARR
+    c2 = c2 || EMPTY_ARR
+    const oldLength = c1.length                         // 老 children 的长度
+    const newLength = c2.length                         // 新 children 的长度
+    const commonLength = Math.min(oldLength, newLength) // 新老 children 最小长度
+
+    let i
+    // 从前往后遍历新老 children 公共部分，从头 patch 每一个 vnode
+    // 这里并不会复用，如果同一个位置上的 vnode 类型不同，那么就会移除旧的，创建新的
+    for (i = 0; i < commonLength; i++) {
+        const nextChild = (c2[i] = optimized
+            ? cloneIfMounted(c2[i] as VNode)
+            : normalizeVNode(c2[i]))
+        patch(
+            c1[i],
+            nextChild,
+            container,
+            null,
+            parentComponent,
+            parentSuspense,
+            isSVG,
+            optimized
+        )
+    }
+    // 检测是否存在新增或删除的 vnode
+    if (oldLength > newLength) {
+        // 老 children 的数量 > 新 children 的数量，说明需要移除从 commonLength 开始的老 children
+        unmountChildren(
+            c1,
+            parentComponent,
+            parentSuspense,
+            true,
+            false,
+            commonLength
+        )
+    } else {
+        // 新 children 的数量 >= 老 children 的数量，说明需要挂载从 commonLength 开始的新 children
+        mountChildren(
+            c2,
+            container,
+            anchor,             // 此时，anchor 就是 Frgament 的 end anchor，所以会将新 children 都挂载搭配这之前
+            parentComponent,
+            parentSuspense,
+            isSVG,
+            optimized,
+            commonLength
+        )
+    }
+}
+```  
+
+可以看出，这个函数不会复用任何一个节点，不是卸载就是新增，所以会消耗很多性能  
+
+注意：
+1. 在 `patch` 公共部分时，第四个参数兄弟节点传的是 `null`，原理和 [patchBlockChildren](#patchBlockChildren) 中一致  
+2. 在卸载老 `children` 时，第四个参数传 `true`，表示会立即移除节点  
+    第五个参数为 `false`，表示时候用非优化模式，会将所有的子节点都卸载  
 
 # patchKeyedChildren  
 这个函数就是用来比较老 `children` 和 新 `children` 的区别，并对每一个 `vnode` 进行比较，也就是实现了 `Diff` 的核心算法，总共有五个步骤  
@@ -303,12 +362,70 @@ while (i <= e1 && i <= e2) {
 
 ## 第三步 处理连续新增节点  
 
+```typescript
+if (i > e1) {
+    if (i <= e2) {
+        const nextPos = e2 + 1
+        const anchor = nextPos < l2 ? (c2[nextPos] as VNode).el : parentAnchor
+        while (i <= e2) {
+            patch(
+                null,
+                (c2[i] = optimized
+                    ? cloneIfMounted(c2[i] as VNode)
+                    : normalizeVNode(c2[i])),
+                container,
+                anchor,
+                parentComponent,
+                parentSuspense,
+                isSVG
+            )
+            i++
+        }
+    }
+}
+```  
+
+注意：  
+1. 计算兄弟节点 `anchor` 的方法是：  
+    `e2` 插入 `vnode` 列表中，最后一个 `vnode` 的索引，再加 1，就是下一个 `vnode` 的索引  
+        如果这个索引在新 `children` 的范围内，那么 `anchor` 就是这个索引对应的真实节点  
+        如果索引不存在，那么就会使用传递进来的 `parentAnchor`（ 如果 `parentAnchor` 为 `null`，则依次向后插入，如果不是，则会在其之前插入 ）  
+
+### 示例  
+
+#### 从中间插入  
+
+<img src="./images/patchKeyedChildren-01.jpg" alt="从中间插入示例" width="800" />  
+
+先计算 `anchor`，`nextPos` 为 5，存在于新 `children` 范围内( 5 < 6 )，所以 `anchor` 就是 F  
+
+1. 第一次：`patch` 的 `vnode` 是 C，插入到 F 之前，此时容器内为 A B C F  
+2. 第一次：`patch` 的 `vnode` 是 D，插入到 F 之前，此时容器内为 A B C D F  
+3. 第一次：`patch` 的 `vnode` 是 E，插入到 F 之前，此时容器内为 A B C D E F  
+
+#### 从尾部插入  
+
+<img src="./images/patchKeyedChildren-02.jpg" alt="从中间插入示例" width="800" />  
+
+先计算 `anchor`，`nextPos` 为 7，不存在于新 `children` 范围内( 7 < 7 )，所以 `anchor` 就是 `null` 
+
+1. 第一次：`patch` 的 `vnode` 是 E，插入到末尾，此时容器内为 A B C D E 
+2. 第一次：`patch` 的 `vnode` 是 F，插入到末尾，此时容器内为 A B C D E F  
+3. 第一次：`patch` 的 `vnode` 是 G，插入到末尾，此时容器内为 A B C D E F G   
 
 ## 第四步 处理连续删除节点  
 
+```typescript
+else if (i > e2) {
+    while (i <= e1) {
+        unmount(c1[i], parentComponent, parentSuspense, true)
+        i++
+    }
+}
+```  
 
 ## 第五步 处理剩余情况( 移动，非连续的新增、删除 )  
-首先会定义两个指针，分别用于新老 `children`，且都是从 `i` 开始，也就是从第一个不相同的 `vnode` 开始  
+首先会定义两个指针，分别用于指向新老 `children`，且都是从 `i` 开始，也就是从第一个不相同的 `vnode` 开始  
 
 ```typescript
 const s1 = i    // 老 children 的指针
@@ -316,7 +433,7 @@ const s2 = i    // 新 children 的指针
 ```  
 
 ### keyToNewIndexMap  
-这是一个 `Map` 对象，其中 `key` 是 `vnode.key`，而 `value` 是这个 `vnode` 在新 `children` 的位置索引  
+这是一个 `Map` 对象，其中 `key` 是 `vnode.key`，而 `value` 是 `vnode` 在新 `children` 里的位置索引  
 这里会遍历新 `children` 去设置其中的值  
 
 ```typescript
@@ -339,11 +456,11 @@ for ( i = s2; i <= e2; i++ ) {
 }
 ```  
 
-这个变量的作用就是，在之后遍历老 `children` 的时候，可以直接根据 `key` 获取到同一个 `vnode` 在新 `children` 里的位置索引，从而去移动，如果获取不到，则说明这个 `vnode` 不存在于新 `children`，需要卸载  
+这个变量的作用就是，在之后遍历老 `children` 的时候，可以直接根据 `key` 获取到老 `vnode` 在新 `children` 里的位置索引，从而去移动，如果获取不到，则说明这个 `vnode` 不存在于新 `children`，需要卸载  
 
 ### newIndexToOldIndexMap  
-从名字上可以看出，这应该是一个 新索引 -> 老索引 的对象，而实际上却是一个数组，数组的下标是新索引，而值是老索引 + 1  
-需要注意的是，数组里的元素和未被 `patch` 的 `vnode` 是一一对应的，所以数组的长度应该和未被 `patch` 的 `vnode` 个数一致，如下所示  
+这个变量是一个数组，它描述的是 新索引 -> 老索引 的关系，数组每个元素的下标是新索引，而值是老索引 + 1（ 下面会说到老索引为什么要 + 1 ）  
+需要注意的是，数组里的元素和未被 `patch` 的 `vnode` 是一一对应的，即第一个元素对应第一个未被 `patch` 的 `vnode`，如图  
 
 <img src="./images/newIndexToOldIndexMap-01.jpg" width="600" />  
 
@@ -353,8 +470,8 @@ const toBePatched = e2 - s2 + 1
 
 // 初始化为未被 patch vnode 个数的数组
 const newIndexToOldIndexMap = new Array(toBePatched)
-// 初始值都为 0，0 表示 vnode 在老 children 中是不存在的
-// 在之后会遍历未被 patch 的 vnode，会判断 newIndexToOldIndexMap 里的值是否是 0
+// 初始值都为 0，0 表示 vnode 在老 children 中是不存在的（ 因为元素值会 + 1，所以最小也会是 1 ）
+// 在之后会遍历未被 patch 的 vnode 时，会判断 newIndexToOldIndexMap 里的值是否是 0
 // 如果是 0，则表示这个 vnode 在老 children 不存在，所以需要新增
 // 所以 newIndexToOldIndexMap 的值需要加 1，就是为了表示 0 是不存在的 vnode
 for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
@@ -373,7 +490,7 @@ newIndexToOldIndexMap[newIndex - s2] = i + 1
 
 ### 如何知道 vnode 发生了移动  
 
-> 以下示例中节点的 `key` 和就是自身的内容  
+> 以下示例中节点的 `key` 就是自身的内容  
 
 在遍历老 `children` 的时候就可以知道是否发生了移动，先看节点不会发生移动的情况  
 
@@ -451,7 +568,7 @@ for ( i = s1; i <= e1; i++ ) {
             prevChild,
             c2[newIndex] as VNode,
             container,
-            null,   // TODO: anchor 为什么传 null
+            null,
             parentComponent,
             parentSuspense,
             isSVG,
@@ -462,6 +579,8 @@ for ( i = s1; i <= e1; i++ ) {
     }
 }
 ```  
+
+注意：在 `patch` 新老 `vnode` 时，兄弟节点传递的是 `null`，原理和 [patchBlockChildren](#patchBlockChildren) 中是一样的  
 
 ### 获取最长稳定子序列  
 

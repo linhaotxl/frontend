@@ -6,6 +6,8 @@
 - [anchor](#anchor)
 - [patchChildren](#patchchildren)
 - [patchBlockChildren](#patchblockchildren)
+    - [示例](#示例)
+        - [Fragment](#fragment)
 - [patchKeyedChildren](#patchkeyedchildren)
     - [第一步: 处理头部相同的 vnode](#第一步-处理头部相同的-vnode)
     - [第二步: 处理尾部相同的 vnode](#第二步-处理尾部相同的-vnode)
@@ -18,7 +20,7 @@
         - [遍历老 vnode](#遍历老-vnode)
         - [获取最长稳定子序列](#获取最长稳定子序列)
         - [遍历未被 patch 的 vnode](#遍历未被-patch-的-vnode)
-    - [示例](#示例)
+    - [示例](#示例-1)
         - [带有 key 移动节点](#带有-key-移动节点)
         - [不带有 key 移动节点](#不带有-key-移动节点)
 
@@ -55,9 +57,10 @@ const patchChildren: PatchChildrenFn = (
 
     const { patchFlag, shapeFlag } = n2
     
-    // 处理 Fragment 的更新
+    // 1. 处理 Fragment 的更新
     if (patchFlag > 0) {
         if (patchFlag & PatchFlags.KEYED_FRAGMENT) {
+            // KEYED_FRAGMENT 的 Fragment 使用 patchKeyedChildren 处理 children
             patchKeyedChildren(
                 c1 as VNode[],
                 c2 as VNodeArrayChildren,
@@ -70,6 +73,7 @@ const patchChildren: PatchChildrenFn = (
             )
             return
         } else if (patchFlag & PatchFlags.UNKEYED_FRAGMENT) {
+            // UNKEYED_FRAGMENT 的 Fragment 使用 patchUnkeyedChildren 处理 children
             patchUnkeyedChildren(
                 c1 as VNode[],
                 c2 as VNodeArrayChildren,
@@ -84,7 +88,7 @@ const patchChildren: PatchChildrenFn = (
         }
     }
 
-    // children：text、array、none
+    // 2. 处理其他节点，children 无非就三种类型：text、array、none
     if (shapeFlag & ShapeFlags.TEXT_CHILDREN) {
         // now: text
         // text children fast path
@@ -96,6 +100,7 @@ const patchChildren: PatchChildrenFn = (
             unmountChildren(c1 as VNode[], parentComponent, parentSuspense)
         }
 
+        // 此时直接判断新旧 children 是否相同，旧 children 唯一需要卸载的时机就是为数组，上面已经处理过了
         if (c2 !== c1) {
             // now: text
             // 当前是文本节点，如果和之前不相同，都需要重新设置内容
@@ -159,15 +164,15 @@ const patchChildren: PatchChildrenFn = (
 
 # patchBlockChildren  
 这个函数用来比较新老动态 `children`，只会在两个地方被调用  
-1. 在更新一个元素节点时  
-2. 在更新一个带有 `PatchFlags.STABLE_FRAGMENT` 的 `Fragment` 节点时  
+1. 在更新一个元素节点 [patchElement](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md#patchelement) 时，如果存在动态 `children` 就会被调用  
+2. 在 [processFragment](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/fragment/README.md#processFragment) 里更新 `PatchFlags.STABLE_FRAGMENT` 的 `Fragment` 节点时会被调用  
 
-上面两种情况，如果存在动态子 `children`，会调用这个函数，只会更新动态的 `children`
+**只会更新动态 `children` 而不是全部 `children`**  
 
 ```typescript
 const patchBlockChildren: PatchBlockChildrenFn = (
-    oldChildren,
-    newChildren,
+    oldChildren,        // 旧的动态 children 列表
+    newChildren,        // 新的动态 children 列表
     fallbackContainer,
     parentComponent,
     parentSuspense,
@@ -209,6 +214,15 @@ const patchBlockChildren: PatchBlockChildrenFn = (
 ```
 
 **注意，在 `patch` 每个动态节点时，会使用优化模式，这样的话，在 [patchElement](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md#patchElement) 中就只会处理动态 `children`，而不会再去处理全部的 `children`，从而达到优化目的**  
+
+## 示例  
+### Fragment  
+
+```html
+<div>
+    
+</div>
+```
 
 # patchKeyedChildren  
 这个函数就是用来比较老 `children` 和 新 `children` 的区别，并对每一个 `vnode` 进行比较，也就是实现了 `Diff` 的核心算法，总共有五个步骤  

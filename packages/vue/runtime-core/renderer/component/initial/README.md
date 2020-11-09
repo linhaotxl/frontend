@@ -245,7 +245,7 @@ export function createComponentInstance(
     通过 [normalizeEmitsOptions](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/emits/README.md#normalizeemitsoptions) 函数处理组件的 `emits`  
 
 ## setupComponent  
-安装组件，初始化 `props`、`slots`，如果是状态组件，则会再处理状态组件内部的逻辑，如果是函数组件，则什么也不会做  
+安装组件，初始化 `props`、`slots`，如果是状态组件，则会再处理状态组件内部的逻辑，如果是函数组件，则直接安装完成  
 
 ```typescript
 export function setupComponent(
@@ -263,7 +263,7 @@ export function setupComponent(
     // 初始化 slot
     initSlots(instance, children)
 
-    // 如果是状态组件，则调用 setupStatefulComponent 安装状态组件，如果是函数组件则什么也不做
+    // 如果是状态组件，则调用 setupStatefulComponent 安装状态组件，如果是函数则安装完成
     // 且只有是异步组件时，才会返回值
     const setupResult = isStateful
         ? setupStatefulComponent(instance, isSSR)
@@ -276,6 +276,7 @@ export function setupComponent(
 ```  
 
 通过 [initProps](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/props/README.md#initprops) 对组件的 `props` 进行初始化  
+通过 [initSlots](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/slots/README.md#initSlot) 对组件的 `slots` 进行初始化    
 
 ## setupStatefulComponent  
 安装状态组件，主要就是调用 `setup` 函数并处理返回结果  
@@ -386,18 +387,15 @@ export function handleSetupResult(
 }
 ```  
 
-**如果 setup 返回对象作为状态时，实际会被代理拦截**
+**如果 setup 返回对象作为状态时，实际会被 [proxyRefs](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/ref/README.md#proxyRefs) 代理**
 
 ## finishComponentSetup  
-组件对象上 `render` 的来源  
-1. 组件对象存在 `template`，经过编译会将其转换为渲染函数，并挂载在组件对象的 `render` 上  2
-2. 组件对象本身就存在 `render` 渲染函数  
-
-组件实例上 `render` 的来源  
-1. 来源于组件对象上的 `render`  
-2. 来源于 `setup` 返回的函数  
-
 这个函数用来设置组件实例上的渲染函数 `render`，因为 `render` 的来源有很多，所以会统一挂载在组件实例上  
+
+渲染函数 `render` 的来源  
+1. 组件对象存在 `template`，经过编译会将其转换为渲染函数，并挂载在组件对象的 `render` 上  
+2. 组件对象本身就存在 `render` 渲染函数  
+3. `setup` 返回函数，会作为渲染函数 `render`  
 
 ```typescript
 function finishComponentSetup(
@@ -416,9 +414,10 @@ function finishComponentSetup(
     // 客户端渲染
     else if (!instance.render) {
         // 组件实例上不存在 render 函数
-        // 只有 setup 返回函数 这种情况，才不会进入这个 if 中
+        // 上述 1、2 两种情况
         
         if (compile && Component.template && !Component.render) {
+            // 上述 1 情况
             // 组件对象存在模板，且不存在渲染函数，才会模板编译为渲染函数，并挂载在组件对象上
             Component.render = compile(Component.template, {
                 isCustomElement: instance.appContext.config.isCustomElement,

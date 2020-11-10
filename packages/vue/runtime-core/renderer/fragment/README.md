@@ -3,17 +3,17 @@
 <!-- TOC -->
 
 - [processFragment](#processfragment)
-- [patchUnkeyedChildren](#patchunkeyedchildren)
+- [示例](#示例)
+    - [UNKEYED_FRAGMENT](#unkeyed_fragment)
+    - [STABLE_FRAGMENT](#stable_fragment)
 
 <!-- /TOC -->
 
 # processFragment  
-这个函数是处理 `Fragment` 的入口函数，因为 `Fragment` 并不会实际渲染出来，所以源码中会通过两个文本节点来标记 `Fragment` 的范围，只要是 `Fragment` 的子节点，都会存在于这两个文本节点之间  
+这个函数是处理 `Fragment` 的入口函数，我们知道 `Fragment` 并不会实际渲染到 `DOM` 中，所以源码中会通过两个文本节点来标记 `Fragment` 的范围，只要是 `Fragment` 的子节点，都会存在于这两个文本节点之间  
 
 开始的文本节点称为 `fragmentStartAnchor`，会被挂载到 `Fragment` 对应 `vnode` 的 `el` 上  
-结束的文本节点称为 `fragmentEndAnchor`，会被挂载到 `Fragment` 对应 `vnode` 的 `anchor` 上   
-
-因为 `Fragment` 并不是一个组件，所以它内部使用的还是元素的处理方式  
+结束的文本节点称为 `fragmentEndAnchor`，会被挂载到 `Fragment` 对应 `vnode` 的 `anchor` 上，在 `patch` `children` 的时候，参数 `anchor` 就是 `fragmentEndAnchor`，使得所有的 `children` 都会挂载到 `fragmentEndAnchor` 之前  
 
 ```typescript
 const processFragment = (
@@ -32,17 +32,17 @@ const processFragment = (
 
     let { patchFlag, dynamicChildren } = n2
 
-    // 如果 Fragment 的 patchFlag 有值，则开始优化模式
+    // 如果 Fragment 的 patchFlag 有值，则开启优化模式
     if (patchFlag > 0) {
         optimized = true
     }
 
     if (n1 == null) {
         // 挂载
-        // 第一步将两个文本节点挂载到容器内
+        // 1. 将两个文本节点挂载到容器内
         hostInsert(fragmentStartAnchor, container, anchor)
         hostInsert(fragmentEndAnchor, container, anchor)
-        // 第二步挂载子 children，注意第三个参数，会将所有的子节点挂载在 结束文本 之前
+        // 2. 挂载 children，注意第三个参数，会将所有的子节点挂载在 结束文本 之前
         mountChildren(
             n2.children as VNodeArrayChildren,
             container,
@@ -99,68 +99,58 @@ const processFragment = (
 
 **总结：对于 `Fragment` 的更新，是更新全部 `children` 还是动态 `children` 取决于是否是 `STABLE_FRAGMENT`；是否开启优化模式取决于是否存在 `patchFlag`**  
 
-# patchUnkeyedChildren  
-这个函数用来更新没有 `key` 的 `Fragment` 子 `children`  
-其中 `anchor` 参数就是这个 `Fragment` 的结束文本节点，所以如果有需要挂载的新节点，都会挂载在结束文本之前  
+# 示例  
+
+## UNKEYED_FRAGMENT  
 
 ```typescript
-const patchUnkeyedChildren = (
-    c1: VNode[],
-    c2: VNodeArrayChildren,
-    container: RendererElement,
-    anchor: RendererNode | null,
-    parentComponent: ComponentInternalInstance | null,
-    parentSuspense: SuspenseBoundary | null,
-    isSVG: boolean,
-    optimized: boolean
-) => {
-    c1 = c1 || EMPTY_ARR
-    c2 = c2 || EMPTY_ARR
-    const oldLength = c1.length
-    const newLength = c2.length
-    // 获取新旧最小长度，以便遍历公共部分
-    const commonLength = Math.min(oldLength, newLength)
-    
-    for (let i = 0; i < commonLength; i++) {
-        const nextChild = (c2[i] = optimized
-            ? cloneIfMounted(c2[i] as VNode)
-            : normalizeVNode(c2[i]))
-        patch(
-            c1[i],
-            nextChild,
-            container,
-            null,       // TODO: 为什么 anchor 传递为 null
-            parentComponent,
-            parentSuspense,
-            isSVG,
-            optimized
-        )
-    }
-    
-    if (oldLength > newLength) {
-        // 移除老的节点，这里卸载的时候使用了非优化模式，会将所有的子节点都卸载
-        unmountChildren(
-            c1,
-            parentComponent,
-            parentSuspense,
-            true,
-            false,
-            commonLength
-        )
-    } else {
-        // 挂载新的节点
-        mountChildren(
-            c2,
-            container,
-            anchor,           // 这里挂载新的节点，还是挂载在 Fragment 的 end anchor 之前
-            parentComponent,
-            parentSuspense,
-            isSVG,
-            optimized,
-            commonLength
-        )
-    }
-}
+const root = document.createElement( 'div' );
+
+// 1
+render(createVNode(
+    Fragment,
+    null,
+    [
+        (openBlock(), createBlock('div', null, [
+            createVNode('span', null, 'one', PatchFlags.TEXT),
+            createVNode('i', null, 'bar'),
+        ]))
+    ],
+    PatchFlags.UNKEYED_FRAGMENT
+), root);
+
+// 2
+render(createVNode(
+    Fragment,
+    null,
+    [
+        (openBlock(), createBlock('div', null, [
+            createVNode('span', null, 'two', PatchFlags.TEXT),
+            createVNode('i', null, 'bar'),
+        ]))
+    ],
+    PatchFlags.UNKEYED_FRAGMENT
+), root);
 ```  
 
-**可以看到，对于没有 `key` 的 `children` 来说，没有复用任何一个节点，在 `patch` 每个节点的时候，如果不是同一类型的节点，就会先移除再创建**
+在第二步更新 Fragment 时，会由 [processFragment](#processFragment) -> [patchChildren](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md#patchChildren) -> [patchUnkeyedChildren](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md#patchunkeyedchildren) 这一系列的调用，最终在 [patchUnkeyedChildren](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md#patchunkeyedchildren) 处理（ 并且此时是开启了优化更新 ），在 `patch` `div` 时，由于开启了优化且存在动态子节点，所以只会对 `span` 处理，而不会对 `i` 处理  
+
+这个示例对 `KEYED_FRAGMENT` 的 `Fragment` 也适用，只不过最终是在 [patchKeyedChildren](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md#patchkeyedchildren) 中处理  
+
+## STABLE_FRAGMENT  
+
+```html
+<p>this is static text.</p>
+<p>{{ text }}</p>
+```  
+
+会被编译为  
+
+```typescript
+(_openBlock(), _createBlock(_Fragment, null, [
+    _createVNode("p", null, "this is static text."),
+    _createVNode("p", null, _toDisplayString(_ctx.text), 1 /* TEXT */)
+], 64 /* STABLE_FRAGMENT */))
+```  
+
+可以看到，最外面是一个 `STABLE_FRAGMENT` 的 `Fragment`，如果发生了更新，那么在 [processFragment](#processFragment) 中只会处理动态 `children`，也就是第二个 `p` 标签，第一个静态的是不会处理的  

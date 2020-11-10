@@ -199,7 +199,7 @@ const mountElement = (
 const mountChildren: MountChildrenFn = (
     children,           // 需要挂载的 vnode 列表
     container,          // 父节点，将每个 children 挂载至 container 里
-    anchor,             // 兄弟节点，将每个 children 挂载是 anchor 之前
+    anchor,             // 兄弟节点，将每个 children 挂载至 anchor 之前
     parentComponent,    // 
     parentSuspense,
     isSVG,

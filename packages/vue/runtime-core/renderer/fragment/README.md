@@ -3,6 +3,7 @@
 <!-- TOC -->
 
 - [processFragment](#processfragment)
+- [removeFragment](#removefragment)
 - [示例](#示例)
     - [UNKEYED_FRAGMENT](#unkeyed_fragment)
     - [STABLE_FRAGMENT](#stable_fragment)
@@ -98,6 +99,28 @@ const processFragment = (
 ```   
 
 **总结：对于 `Fragment` 的更新，是更新全部 `children` 还是动态 `children` 取决于是否是 `STABLE_FRAGMENT`；是否开启优化模式取决于是否存在 `patchFlag`**  
+
+# removeFragment  
+这个函数用来移除 `Fragment` 节点，需要将 “开始文本节点” - “结束文本节点” 之间的所有内容（ 包括自身 ）都移除  
+
+```typescript
+/**
+ * @param { RendererNode } cur 指向开始文本节点的指针
+ * @param { RendererNode } end 指向结束文本节点的指针
+ */
+const removeFragment = (cur: RendererNode, end: RendererNode) => {
+    // 当 cur 和 end 指向的不是同一内容时，移除 cur 指向的节点，并将 cur 指向下一个兄弟节点
+    // 直至 cur 指向最后一个节点 end
+    let next
+    while (cur !== end) {
+        next = hostNextSibling(cur)!
+        hostRemove(cur)
+        cur = next
+    }
+    // 再删除 end 指向的节点
+    hostRemove(end)
+}
+```  
 
 # 示例  
 

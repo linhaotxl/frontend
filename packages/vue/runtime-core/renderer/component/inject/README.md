@@ -13,30 +13,9 @@
 # provide  
 在一个组件内，通过 `provide` 可以为所有的子组件提供数据( 无论嵌套多少层子组件 )，但是 `provide` 必须在组件的 `setup` 函数中使用，否则会抛出警告  
 
-每一个组件都会对应一个组件实例，而在每个组件实例上都会挂载 `app` 的 `context`，这个 `context` 是通过 `createAppContext` 方法产生的  
+每一个组件都会对应一个组件实例，而在每个组件实例上都会挂载 `app` 的 `context`，这个 `context` 是通过 [createAppContext](#createAppContext) 方法产生的  
 
-```typescript
-export function createAppContext(): AppContext {
-    return {
-        app: null as any,
-            config: {
-            isNativeTag: NO,
-            performance: false,
-            globalProperties: {},
-            optionMergeStrategies: {},
-            isCustomElement: NO,
-            errorHandler: undefined,
-            warnHandler: undefined
-        },
-        mixins: [],
-        components: {},
-        directives: {},
-        provides: Object.create(null)
-    }
-}
-```  
-
-可以看到，`context` 里的 `provides` 就是一个普通对象，并且不会继承任何属性。生成 `context` 后，会在调用 `createApp().mount()` 时将其挂载到根组件的 `vnode` 上  
+`context` 里的 `provides` 就是一个普通对象，并且不会继承任何属性。生成 `context` 后，会在调用 `createApp().mount()` 时将其挂载到根组件的 `vnode` 上  
 
 ```typescript
 export function createAppAPI<HostElement>(
@@ -88,12 +67,12 @@ export function createAppAPI<HostElement>(
 }
 ```  
 
-在创建组件实例时，每个实例的 `context` 来源会有两个
+在创建组件实例 [createComponentInstance](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#createcomponentinstance) 时，每个实例的 `context` 来源会有两个
 1. 如果是根组件，那么就会取 `vnode` 上的 `appContext`
 2. 如果不是根组件，那么就会取父组件的 `appContext`  
 
-由此可以看到，在整个应用中，每个组件实例的 `appContext` 其实都指向的是 `app` 里的 `context` 这个对象  
-而对于每个组件的 `provides` 也一样，指向 `app.context.provides`，但是如果在组件中使用了 `provide` 函数，那么就会打破这个关系，后面会看到   
+由此可以看到，在整个应用中，每个组件实例的 `appContext` 其实都指向的是 `app` 里的 `context` 对象  
+而对于每个组件的 `provides` 也一样，指向 `app.context.provides`  
 
 ```typescript
 export function createComponentInstance (
@@ -114,7 +93,7 @@ export function createComponentInstance (
 }
 ```  
 
-接下来看 `provide` 函数的实现，该函数只能用在某一个组件的 `setup` 内调用  
+接下来看 `provide` 函数的实现  
 
 ```typescript
 export function provide<T>(key: InjectionKey<T> | string, value: T) {
@@ -132,6 +111,7 @@ export function provide<T>(key: InjectionKey<T> | string, value: T) {
 
         // 检测当前组件和父组件的 provides 是否相等
         // 默认情况下，在生成组件实例时，组件的 provides 都会和父组件指向同一个 provides，所以肯定相等
+        
         // 而既然我们在某个组件里使用了 provide 函数，那么提供的这个数据应该只能被加到当前组件中，而不能影响父组件
         // 所以此时我们需要将当前组件的 provides 指向一个新的对象，并且还需要保证能访问到父组件中的数据，所以需要继承父组件的 provides
         if (parentProvides === provides) {
@@ -143,6 +123,8 @@ export function provide<T>(key: InjectionKey<T> | string, value: T) {
     }
 }
 ```  
+
+`provide` 必须在含有 `currentInstance` 的环境下才能执行成功，而 `currentInstance` 是在执行组件的 `setup` 前后被设置和恢复的，参考 [setupstatefulcomponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent)，所以 `provide` 也就只能在 `setup` 内调用  
 
 # inject  
 `provide` 用于提供数据，而 `inject` 用于获取数据，并且还可以提供获取不到时的默认值  
@@ -160,6 +142,7 @@ export function inject(
     treatDefaultAsFactory = false
 ) {
     // 获取当前正在渲染的组件，当前组件可以是状态组件，也可以是函数组件
+    // 这也就是为什么还需要再获取 currentRenderingInstance
     const instance = currentInstance || currentRenderingInstance
 
     if (instance) {

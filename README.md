@@ -38,6 +38,7 @@
         * [组件 proxy 的处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/proxy/README.md)  
         * [组件 slots 的处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/slots/README.md)  
         * [组件更新过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/update/README.md)  
+        * [组件生命周期](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/lifecycle/README.md)  
         * [组件 inject/provide 注入](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/inject/README.md)  
         * [组件 ref 处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/ref/README.md)  
         * [加载组件/指令](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/assets/README.md)  

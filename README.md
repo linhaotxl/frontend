@@ -40,6 +40,7 @@
         * [组件更新过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/update/README.md)  
         * [组件 inject/provide 注入](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/inject/README.md)  
         * [组件 ref 处理](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/ref/README.md)  
+        * [加载组件/指令](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/assets/README.md)  
 
     3. 元素的渲染  
         * [元素初始化过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/initial/README.md)

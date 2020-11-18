@@ -17,7 +17,7 @@
 ```html
 <div ref="refKey"></div>
 ```  
-为了以下说明方便，将 `ref` 的属性值称为 “**属性值**”，而将实际绑定到 `ref` 的值(也就是上面的 DOM 对象)，称为 “**实际值**”  
+为了以下说明方便，将 `ref` 的属性值( 即 `refKey` )称为 “**属性值**”，而将实际绑定到 `ref` 的值(也就是上面的 DOM 对象)，称为 “**实际值**”  
 
 # ref 使用  
 使用 `ref` 可以有如下几种方式  
@@ -43,7 +43,7 @@
     };
     ```  
 
-    注意：如果 `ref` 的 “属性值” 是字符串，并且这个字符串是以 `key` 在 `setup state` 中的，那么会同时更新 `setup state` 中的值  
+    注意：如果 `ref` 的 “属性值” 是字符串，并且这个字符串存在于 `setupState` 中，那么会同时更新 `setupState` 中的值  
 
 2. `Ref` 对象形式  
     ```typescript
@@ -71,29 +71,32 @@
     ```
 
 # vnode 中的 ref  
-在生成 `vnode` 节点中，是这样处理 `ref`  
+在创建 `vnode` 的过程 [createVNode](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/vnode/README.md#createVNode) 中，是通过 [normalizeRef](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/vnode/README.md#normalizeRef) 来处理 `ref` 的   
 
 ```typescript
-const vnode: VNode = {
-    /* ... */
-    ref: props && props.ref !== undefined
-        ? [currentRenderingInstance!, props.ref]
-        : null,
-    /* ... */
-};
+const normalizeRef = ({ ref }: VNodeProps): VNodeNormalizedRefAtom | null => {
+    return (ref != null
+        ? isArray(ref)
+            ? ref
+            : { i: currentRenderingInstance, r: ref }
+        : null) as any
+}
 ```  
 
-如果传递了 `ref` 属性，那么它的值会是一个数组
-1. 第一个元素是当前渲染的组件实例 `currentRenderingInstance`，这个变量在执行组件的 `render` 方法前后会被设置，可以理解为 `ref` 属性所在的那个组件实例  
-2. 第二个元素是 `ref` 的 “属性值”
+可以看到，`vnode.ref` 的值有三种情况  
+1. 没有传递 `ref`，则为 `null`  2
+2. `ref` 为对象，包含当前渲染的组件实例，以及 `ref` 属性值  
+3. `ref` 为数组，里面每个元素都是第二种情况的对象  
 
 # setRef  
-这个方法用来设置 `ref` 的 “实际值”  
+这个方法用来设置 `ref` 的 “实际值”，只会被调用在两个地方  
+1. 挂载阶段 [patch]()，此时已经创建了真实 DOM 节点，并挂载在父节点中  
+2. 卸载阶段 [unmount]()  
 
 ```typescript
 /**
  * 
- * @param rawRef 新的 ref，包含组件实例以及 ref 的属性值
+ * @param rawRef 新的 ref，包含渲染组件实例 i 以及 ref 的属性值 r
  * @param oldRawRef 旧的 ref，同上
  * @param parentComponent 父组件
  * @param parentSuspense 
@@ -125,9 +128,9 @@ export const setRef = (
         // 卸载，将 ref 实际值设置为 null
         value = null
     } else {
-        // 挂载/更新，根据组件是否是状态组件，来决定最终的值
+        // 挂载/更新，根据组件是否是状态组件，来决定实际值
         if (vnode.shapeFlag & ShapeFlags.STATEFUL_COMPONENT) {
-            // 状态组件，就是组件
+            // 状态组件，就是 ctx 的代理对象
             value = vnode.component!.proxy
         } else {
             // 非状态组件，就是真实节点
@@ -144,7 +147,7 @@ export const setRef = (
     // 获取组件的 setup 状态
     const setupState = owner.setupState
 
-    // 卸载老的 ref
+    // 卸载老的 ref，新老 ref 不一样，就会卸载老的 ref，同步将实际值设置为 null
     if (oldRef != null && oldRef !== ref) {
         if (isString(oldRef)) {
             refs[oldRef] = null
@@ -169,11 +172,11 @@ export const setRef = (
         // ref with the same key
         // 检测是否是卸载
         if (value) {
-            // 挂载/更新，将更新 ref 的操作放在异步中去做
+            // 挂载/更新，将更新 ref 的操作放在异步中去做，异步设置 ref 实际值
             ;(doSet as SchedulerCb).id = -1
-            、(doSet, parentSuspense)
+            queuePostRenderEffect(doSet, parentSuspense)
         } else {
-            // 卸载，直接更新 ref
+            // 卸载，同步更新 ref 实际值为 null
             doSet()
         }
     } else if (isRef(ref)) {
@@ -230,6 +233,7 @@ await nextTick()
 
 // 现在 ref 的属性值为字符串的 bar，此时进入 setRef 会先处理旧的 ref，即 foo
 // 将组件实例中的 foo 设置为 null，并且更新 setup state 中的 foo 为 null
+// 之后再设置 bar 的 ref
 console.log( fooEl.value === null );                // true
 console.log( barEl.value === root.children[0] );    // true
 ```  
@@ -280,14 +284,15 @@ const Comp = {
 
 render(h(Comp), root)
 
-// 到这里会执行一次 render 方法，并且会收集 el 的依赖，当 el 发生变化时，会再次触发 render
-// 将 div 挂载好后，执行 setRef，将 doSet 方法放进了异步任务中
-// 所以现在 div 并没有子元素
+// 到这里会执行一次组件的 render 方法，会收集 el 的依赖，当 el 发生变化时，会再次触发 render
+
+// 将 div 挂载好后，执行 setRef，将 doSet 方法放进了异步队列中，并且开启了异步刷新，将 flushJobs 放进下一轮微任务中执行
+// 在 render 最后会刷新一次异步任务队列，所以执行 doSet 还是处于同步环境下，但在 doSet 里会更新 setupState 中 el，导致 Comp.update 会放进异步队列中
+// 所以现在还没有子节点
 console.log( root.innerHTML === '<div id="foo"></div>' );       // true
 
 await nextTick()
 
-// 异步任务 doSet 执行结束后，使得 setup state 中的 el 就是 div 的真实节点
-// 更新 el 会再次执行 render 方法，使 div 的子节点就是 foo 了
+// 等到下一轮微任务开始行，会刷新异步队列，再次执行 Comp.render 渲染组件，使子节点为 foo
 console.log( root.innerHTML === '<div id="foo">foo</div>' );    // true
 ```

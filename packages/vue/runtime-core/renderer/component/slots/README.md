@@ -17,6 +17,7 @@
     - [编译过的插槽](#编译过的插槽)
     - [未编译过的插槽](#未编译过的插槽)
     - [手动调用 slot](#手动调用-slot)
+    - [综合应用](#综合应用)
 
 <!-- /TOC -->
 
@@ -562,3 +563,46 @@ const manual = (openBlock(), createBlock(Fragment, null, slot()))
 const templateRendered = renderSlot({ default: slot }, 'default')
 // templateRendered.dynamicChildren!.length; // 1
 ```
+
+## 综合应用  
+
+```typescript
+const Child = {
+    render(this: any) {
+        return this.$slots.default()
+    }
+}
+
+const Comp = {
+    setup () {
+        onMounted(() => {
+            const tag = (getCurrentInstance()!.proxy!.$refs.foo as any).tag
+            console.log( tag === 'div' );
+        });
+    },
+    render() {
+        return h(Child, () => {
+            return h('div', { ref: 'foo' })
+        })
+    }
+}
+
+render(h(Comp), document.querySelector('#root'));
+```  
+
+1. 在执行 `Comp.render` 中，渲染的 `Child` 对应的 `vnode`，它的子节点会被认为是 `default` 的 `slots`，即 `vnode.children` 就是   
+    ```typescript
+    {
+        default: () => {
+            return h('div', { ref: 'foo' })
+        },
+        _ctx: currentRenderingInstance  // 这里的 currentRenderingInstance 实际指向的是 Comp 组件实例
+    }
+    ```
+
+2. 在之后会创建 `Child` 组件实例，并初始化 `slots` 内容，会通过 [withCtx](#withCtx) 包裹 `default` 的函数，使得在执行包裹函数 `renderFnWithContext` 时，`ctx` 就是 `Comp` 组件，最终将结果挂载在 `Child.slots.default` 上   
+
+3. 在 `Child.render` 中，调用 `slots.default`( 实际就是包装过的 `renderFnWithContext` )，会将 `currentRenderingInstance` 设置为 `Comp` 组件，接着执行 `default` 原始函数，创建 `div` 的 `vnode`，其中 `ref` 就是 `{ i: currentRenderingInstance, r: 'foo' }`  
+
+4. 最后调用 `setRef` 设置 `ref` 时，会将真实 DOM 元素设置在 `Comp.refs` 中，所以在 `Comp` 的 `onMounted` 中，是可以从 `refs` 中访问到 `foo` 的   
+ 

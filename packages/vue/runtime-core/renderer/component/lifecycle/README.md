@@ -9,7 +9,7 @@
 <!-- /TOC -->
 
 # 生命周期的类型  
-每个组件在创建实例对象 [createcomponentinstance](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#createcomponentinstance) 时，都会创建生命周期钩子属性，例如 `bm`、`m` 等等，它们的值都是数组，保存的是这个生命周期需要触发的回调，置于每个生命周期的钩子名称，都是存储在 `LifecycleHooks` 枚举里，和实例上的属性名一一对应  
+每个组件在创建实例对象 [createcomponentinstance](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#createcomponentinstance) 时，都会创建生命周期钩子属性，例如 `bm`、`m` 等等，它们的值都是数组，保存的是这个生命周期需要触发的回调，每个生命周期的钩子名称，都是存储在 `LifecycleHooks` 枚举里，和实例上的属性名一一对应  
 
 ```typescript
 export const enum LifecycleHooks {

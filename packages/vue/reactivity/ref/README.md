@@ -26,7 +26,7 @@
 function isRef( r: any ): r is Ref {
   return r ? r._isRef === true : false
 }
-```   
+```
 
 ## convert  
 上面说的，如果参数为对象，会将这个对象 `reactive` 响应化，就是通过这个函数处理   
@@ -52,7 +52,7 @@ function ref( value ) {
 function shallowRef( value ) {
   return createRef( value, true )
 }
-```  
+```
 
 下面来看 `createRef` 的实现  
 
@@ -103,7 +103,7 @@ function createRef( rawValue: unknown, shallow = false ) {
 
   return r
 }
-```  
+```
 
 1. 先来看第 ① 和 ② 处，如果是浅响应，则不会转换原始值  
 
@@ -128,7 +128,7 @@ sref.value.count = 2;
 sref.value === original;  // false
 isReactive( sref.value ); // true
 dummy === 2;              // true
-```  
+```
 
 浅响应  
 
@@ -145,7 +145,7 @@ sref.value.count = 2;
 
 sref.value === original;  // true
 dummy === 0;              // true
-```  
+```
 
 2. 再看 ③ 处，这里是 `ref` 的 `value` 属性，可以看到，每次访问的时候，都会追踪 `value` 属性，因为 `ref` 对象的 `value` 是固定不变的，所以这里就写死了  
 
@@ -157,7 +157,7 @@ dummy === 0;              // true
 ```typescript
 triggerRef( sref );
 dummy === 2;  // true
-```  
+```
 
 ## unref  
 这个方法用来解绑 `ref` 对象，也就是直接获取原始值   
@@ -166,7 +166,7 @@ dummy === 2;  // true
 function unref<T>( ref: T ): T extends Ref<infer V> ? V : T {
   return isRef( ref ) ? ( ref.value as any ) : ref
 }
-```  
+```
 
 ## customRef  
 这个方法用来定义自定义的 `ref` 对象，接受一个回调作为参数，回调有两个参数  
@@ -200,6 +200,6 @@ customerRef.value = 2;
 
 customerRef.value === 2;  // true
 dummy === 2;              // true
-```  
+```
 
 注意: 在 `set` 方法中，一定要先设置值，再触发依赖，因为触发依赖是同步执行的，所以在执行依赖前要修改掉

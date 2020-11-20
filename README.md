@@ -47,5 +47,6 @@
         * [元素初始化过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/initial/README.md)
         * [元素更新过程](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md)
         * [处理 children](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/children/README.md)
+        * [元素卸载](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/unmount/README.md)
 
     4. [Fragment 的渲染](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/fragment/README.md)

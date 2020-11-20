@@ -90,7 +90,8 @@ const patchChildren: PatchChildrenFn = (
         if (prevShapeFlag & ShapeFlags.ARRAY_CHILDREN) {
             // now: text
             // prev: array
-            // 之前是列表节点，需要将列表节点卸载，使用非优化，会将所有的子节点都卸载
+            // 之前是列表节点，需要将列表节点卸载
+            // 这里要注意的是，第四个参数没有传递，所以不会立即删除真实的 DOM 元素，而是等到下面卸载完，直接将文本节点替换掉原来的节点
             unmountChildren(c1 as VNode[], parentComponent, parentSuspense)
         }
 
@@ -125,7 +126,8 @@ const patchChildren: PatchChildrenFn = (
                 // now: none
                 // prev: array
                 // 没有子节点，仅需要卸载旧的列表节点
-                unmountChildren(c1 as VNode[], parentComponent, parentSuspense, true)
+                // 第四个参数传递了 true，表明需要立即移除真实 DOM 元素，因为新 children 为 null，什么都没有，所以需要立即移除
+              	unmountChildren(c1 as VNode[], parentComponent, parentSuspense, true)
             }
         } else {
             // now: array | none
@@ -154,7 +156,7 @@ const patchChildren: PatchChildrenFn = (
         }
     }
 }
-```  
+```
 
 # patchBlockChildren  
 这个函数用来比较新老动态 `children`，只会在两个地方被调用  
@@ -205,7 +207,7 @@ const patchBlockChildren: PatchBlockChildrenFn = (
         )
     }
 }
-```  
+```
 
 注意：
 1. 在 `patch` 每个动态节点时，会使用优化模式，这样的话，在 [patchElement](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/update/README.md#patchElement) 中就只会处理动态 `children`，而不是全部 `children`，从而达到优化目的  
@@ -252,6 +254,7 @@ const patchUnkeyedChildren = (
     // 检测是否存在新增或删除的 vnode
     if (oldLength > newLength) {
         // 老 children 的数量 > 新 children 的数量，说明需要移除从 commonLength 开始的老 children
+      	// 此时老 children 多出来了一部分，所以需要立即移除真实 DOM 元素( 第四个参数为 true )
         unmountChildren(
             c1,
             parentComponent,
@@ -274,7 +277,7 @@ const patchUnkeyedChildren = (
         )
     }
 }
-```  
+```
 
 可以看出，这个函数不会复用任何一个节点，不是卸载就是新增，所以会消耗很多性能  
 
@@ -383,7 +386,7 @@ if (i > e1) {
         }
     }
 }
-```  
+```
 
 注意：  
 1. 计算兄弟节点 `anchor` 的方法是：  
@@ -422,7 +425,7 @@ else if (i > e2) {
         i++
     }
 }
-```  
+```
 
 ## 第五步 处理剩余情况( 移动，非连续的新增、删除 )  
 首先会定义两个指针，分别用于指向新老 `children`，且都是从 `i` 开始，也就是从第一个不相同的 `vnode` 开始  
@@ -430,7 +433,7 @@ else if (i > e2) {
 ```typescript
 const s1 = i    // 老 children 的指针
 const s2 = i    // 新 children 的指针
-```  
+```
 
 ### keyToNewIndexMap  
 这是一个 `Map` 对象，其中 `key` 是 `vnode.key`，而 `value` 是 `vnode` 在新 `children` 里的位置索引  
@@ -454,7 +457,7 @@ for ( i = s2; i <= e2; i++ ) {
         keyToNewIndexMap.set(nextChild.key, i)
     }
 }
-```  
+```
 
 这个变量的作用就是，在之后遍历老 `children` 的时候，可以直接根据 `key` 获取到老 `vnode` 在新 `children` 里的位置索引，从而去移动，如果获取不到，则说明这个 `vnode` 不存在于新 `children`，需要卸载  
 
@@ -475,7 +478,7 @@ const newIndexToOldIndexMap = new Array(toBePatched)
 // 如果是 0，则表示这个 vnode 在老 children 不存在，所以需要新增
 // 所以 newIndexToOldIndexMap 的值需要加 1，就是为了表示 0 是不存在的 vnode
 for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
-```  
+```
 
 而 `newIndexToOldIndexMap` 被赋值是在之后遍历老 `children` 的时候，为了方便说明，会在这里解释  
 
@@ -486,7 +489,7 @@ for (i = 0; i < toBePatched; i++) newIndexToOldIndexMap[i] = 0
 // s2 是新列表中，第一个不相同 vnode 的索引，可以理解为是第一个未被 patch 的 vnode 从头开始计算的索引
 // newIndex - s2 就是在未被 patch 列表里的索引，而不是从头开始的
 newIndexToOldIndexMap[newIndex - s2] = i + 1
-```  
+```
 
 ### 如何知道 vnode 发生了移动  
 
@@ -578,7 +581,7 @@ for ( i = s1; i <= e1; i++ ) {
         patched++
     }
 }
-```  
+```
 
 注意：在 `patch` 新老 `vnode` 时，兄弟节点传递的是 `null`，原理和 [patchBlockChildren](#patchBlockChildren) 中是一样的  
 
@@ -595,7 +598,7 @@ const increasingNewIndexSequence = moved
 
 // 指向稳定节点的指针，从后往前
 let j = increasingNewIndexSequence.length - 1
-```  
+```
 
 下面这个示例中的稳定子序列 `increasingNewIndexSequence` 就是 `[ 0, 1 ]`，代表了 C 和 D 是稳定的，不需要移动  
 
@@ -644,7 +647,7 @@ for ( i = toBePatched - 1; i >= 0; i-- ) {
         }
     }
 }
-```    
+```
 
 ## 示例  
 
@@ -659,14 +662,14 @@ for ( i = toBePatched - 1; i >= 0; i-- ) {
 
 1. 经过前两个步骤，会将 A 和 E `patch`，此时 i 为 `1`，e1 为 `4`，e2 为 4，容器里的内容是 A B C D E，接下来进入第五步  
 2. 计算 `keyToNewIndexMap` 的内容为  
-    
+   
     ```typescript
     {
         C: 1,
         F: 2,
         B: 3,
     }
-    ```  
+    ```
 
 3. 初始化 `newIndexToOldIndexMap` 为 `[ 0, 0, 0 ]`  
 
@@ -695,12 +698,12 @@ for ( i = toBePatched - 1; i >= 0; i-- ) {
 
 1. 第一个步骤没有相同的 `vnode`，第二个步骤会将 C 和 E `patch`，它们的 `tag` 和 `key` 都相同，此时 i 为 0，e1 为 2，e2 为 4，容器里的内容是 1 A B E  
 2. 计算 `keyToNewIndexMap` 的内容为  
-    
+   
     ```typescript
     {
         1: 4
     }
-    ```  
+    ```
 
 3. 初始化 `newIndexToOldIndexMap` 为 `[ 0, 0, 0, 0, 0 ]`  
 4. 遍历老 `children`  

@@ -14,6 +14,13 @@
     - [finishComponentSetup](#finishcomponentsetup)
     - [setupRenderEffect](#setuprendereffect)
         - [挂载](#挂载)
+        - [更新](#更新)
+            - [updateHOCHostEl](#updatehochostel)
+- [updateComponent](#updatecomponent)
+    - [shouldUpdateComponent](#shouldupdatecomponent)
+    - [hasPropsChanged](#haspropschanged)
+- [示例](#示例)
+    - [HOC更新](#hoc更新)
 
 <!-- /TOC -->
 
@@ -555,4 +562,303 @@ if (!instance.isMounted) {
     // 标识已经挂载完成
     instance.isMounted = true
 }
-```
+```  
+
+### 更新  
+组件的更新来源有两个  
+1. 组件内部状态的更新，此时会通过异步更新来执行组件的 `update` 函数  
+2. 父组件的更新，导致子组件更新，此时会通过 [patch](#patch) -> [processComponent](#processComponent) -> [updateComponent](#updateComponent) 来更新子组件  
+
+```typescript
+// next 是最新的 vnode，在上述第一种情况下，next 为 null；第二种情况下 next 为最新 vnode，即 n2
+let { next, bu, u, parent, vnode } = instance
+let originNext = next
+let vnodeHook: VNodeHook | null | undefined
+
+// 检测是组价内部状态的更新，还是父组件更新导致组件的更新
+if (next) {
+    // 父组件更新导致，需要更新 props 和 slots
+    updateComponentPreRender(instance, next, optimized)
+} else {
+    // 组件内部状态变化，将组件 vnode 赋值给 next，确保 next 始终指向最新的 vnode
+    next = vnode
+}
+
+// 更新最新 vnode 的 el，复用老的真实 DOM；这句代码主要针对的情况就是父组件更新，那么 next 就是新 vnode，是不存在 el 的
+next.el = vnode.el
+
+// 同步执行组件的 before update 钩子
+if (bu) {
+    invokeArrayFns(bu)
+}
+
+// 同步执行 vnode 的 before update 钩子
+if ((vnodeHook = next.props && next.props.onVnodeBeforeUpdate)) {
+    invokeVNodeHook(vnodeHook, parent, next, vnode)
+}
+
+// 调用 render 函数获取子节点 vnode
+const nextTree = renderComponentRoot(instance)
+
+// 保存旧的子 children，并更新 新的 children
+const prevTree = instance.subTree
+instance.subTree = nextTree
+
+// reset refs
+// only needed if previous patch had refs
+if (instance.refs !== EMPTY_OBJ) {
+    instance.refs = {}
+}
+
+// 对比新老 children
+patch(
+    prevTree,
+    nextTree,
+    // parent may have changed if it's in a teleport
+    hostParentNode(prevTree.el!)!,
+    // anchor may have changed if it's in a fragment
+    getNextHostNode(prevTree),
+    instance,
+    parentSuspense,
+    isSVG
+)
+
+// 更新 el
+next.el = nextTree.el
+
+// 更新 HOC 情况下，组件的 el
+if (originNext === null) {
+    updateHOCHostEl(instance, nextTree.el)
+}
+
+// 此时已经更新完成，所以处理组件的 updated 钩子，将其放入 post 任务队列中等待执行
+if (u) {
+    queuePostRenderEffect(u, parentSuspense)
+}
+
+// 所以处理 vnode 的 updated 钩子，将其放入 post 任务队列中等待执行
+if ((vnodeHook = next.props && next.props.onVnodeUpdated)) {
+    queuePostRenderEffect(() => {
+    invokeVNodeHook(vnodeHook!, parent, next!, vnode)
+    }, parentSuspense)
+}
+```  
+
+#### updateHOCHostEl
+这个函数用来更新通过 HOC 生成的那些组件的 `el` 属性；当一个组件被多个 HOC 包裹，并且在组件内部状态变化时，导致子节点发生了变化，这时候子组件的 `vnode.el` 会更新成功，但是上层 HOC 组件则不会自动更新，所以需要通过这个函数来做这件事  
+
+```typescript
+/**
+ * @param { ComponentInternalInstance } 组件实例 
+ * @param { typeof vnode.el } el 更新的真实节点 
+ */
+export function updateHOCHostEl(
+    { vnode, parent }: ComponentInternalInstance,   // vnode 为当前组件，parent 为父组件
+    el: typeof vnode.el
+) {
+    // 父组件存在，且当前 vnode 为父组件的子节点
+    while (parent && parent.subTree === vnode) {
+        // vnode 向上移动为父组件的 vnode，并更新 el
+        ;(vnode = parent.vnode).el = el
+        // parent 向上移动为父组件
+        parent = parent.parent
+    }
+}
+
+```  
+
+具体使用可以参考 [示例](#HOC更新)  
+
+# updateComponent  
+这个函数用来更新一个组件，并且这种情况只会出现在父组件发生了更新，导致子组件更新  
+
+```typescript
+const updateComponent = (n1: VNode, n2: VNode, optimized: boolean) => {
+    const instance = (n2.component = n1.component)!
+    // 检测是否需要更新
+    if (shouldUpdateComponent(n1, n2, optimized)) {
+        if (
+            __FEATURE_SUSPENSE__ &&
+            instance.asyncDep &&
+            !instance.asyncResolved
+        ) {
+            // 异步组件更新
+            // async & still pending - just update props and slots
+            // since the component's reactive effect for render isn't set-up yet
+            updateComponentPreRender(instance, n2, optimized)
+            return
+        } else {
+            // 普通组件更新
+            // 将新 vnode 挂载在 next 上，之后在调用 instance.update() 中会用到
+            instance.next = n2
+            // in case the child component is also queued, remove it to avoid
+            // double updating the same child component in the same flush.
+            invalidateJob(instance.update)
+            // 手动调用 update 函数来重新渲染
+            instance.update()
+        }
+    } else {
+        // 不需要更新，只是拷贝一些属性
+        n2.component = n1.component
+        n2.el = n1.el
+        // 保证组件上的 vnode 为最新的 vnode
+        instance.vnode = n2
+    }
+}
+```  
+
+可以看到，首先会通过 [shouldUpdateComponent](#shouldUpdateComponent) 函数来决定是否更新，如果一个组件的 props 没有发生任何变化，那么它就不应该被更新  
+
+## shouldUpdateComponent  
+这个函数用来检测一个组件是否需要更新  
+
+```typescript
+
+export function shouldUpdateComponent(
+    prevVNode: VNode,
+    nextVNode: VNode,
+    optimized?: boolean
+): boolean {
+    const { props: prevProps, children: prevChildren, component } = prevVNode
+    const { props: nextProps, children: nextChildren, patchFlag } = nextVNode
+    const emits = component!.emitsOptions
+
+    // 如果组件存在指令或者 transition，则会强制更新
+    if (nextVNode.dirs || nextVNode.transition) {
+        return true
+    }
+
+    if (optimized && patchFlag > 0) {
+        if (patchFlag & PatchFlags.DYNAMIC_SLOTS) {
+            // slot content that references values that might have changed,
+            // e.g. in a v-for
+            return true
+        }
+        if (patchFlag & PatchFlags.FULL_PROPS) {
+            if (!prevProps) {
+                return !!nextProps
+            }
+            // presence of this flag indicates props are always non-null
+            return hasPropsChanged(prevProps, nextProps!, emits)
+        } else if (patchFlag & PatchFlags.PROPS) {
+            const dynamicProps = nextVNode.dynamicProps!
+            for (let i = 0; i < dynamicProps.length; i++) {
+                const key = dynamicProps[i]
+                if (
+                    nextProps![key] !== prevProps![key] &&
+                    !isEmitListener(emits, key)
+                ) {
+                    return true
+                }
+            }
+        }
+    } else {
+        // this path is only taken by manually written render functions
+        // so presence of any children leads to a forced update
+        if (prevChildren || nextChildren) {
+            if (!nextChildren || !(nextChildren as any).$stable) {
+                return true
+            }
+        }
+
+        // 新老 props 没有发生变化，不需要更新
+        if (prevProps === nextProps) {
+            return false
+        }
+
+        // 老 props 不存在，是否更新取决于新 props 的值
+        // 例如 h( Comp ) -> h( Comp, { name: 'IconMan' } )
+        if (!prevProps) {
+            return !!nextProps
+        }
+
+        // 老 props 存在，但是新 props 不存在，说明需要更新
+        // 例如 h( Comp, { name: 'IconMan' } ) -> h( Comp )
+        if (!nextProps) {
+            return true
+        }
+
+        // 检查新老 props 里的值是否发生了变化
+        return hasPropsChanged(prevProps, nextProps, emits)
+    }
+
+    return false
+}
+```    
+
+## hasPropsChanged  
+这个函数用来检测新老 `props` 是否发生了变化  
+
+```typescript
+function hasPropsChanged(
+    prevProps: Data,
+    nextProps: Data,
+    emitsOptions: ComponentInternalInstance['emitsOptions']
+): boolean {
+    // 获取新 props 中的所有 key
+    const nextKeys = Object.keys(nextProps)
+
+    // 检测新老 props 的长度是否相同，不同的话说明有变化，需要更新
+    if (nextKeys.length !== Object.keys(prevProps).length) {
+        return true
+    }
+
+    // 遍历新 props，如果和旧 props 中的值不一致，且不是一个通过 emits 声明的事件，就会更新
+    // 之所以会判断是否是事件，是因为事件的变化并不应该导致组件重新渲染
+    for (let i = 0; i < nextKeys.length; i++) {
+        const key = nextKeys[i]
+        if (
+            nextProps[key] !== prevProps[key] &&
+            !isEmitListener(emitsOptions, key)
+        ) {
+            return true
+        }
+    }
+    return false
+}
+```  
+
+
+# 示例  
+
+## HOC更新  
+
+```typescript
+const value = ref(true)
+let parentVnode: VNode
+let middleVnode: VNode
+let childVnode1: VNode
+let childVnode2: VNode
+
+const Parent = {
+    render: () => parentVnode = h(Middle)
+}
+
+const Middle = {
+    render: () => middleVnode = h(Child)
+}
+
+const Child = {
+    render: () => value.value
+        ? (childVnode1 = h('div'))
+        : (childVnode2 = h('span'))
+}
+
+const root = nodeOps.createElement('div')
+render(h(Parent), root)
+
+console.log(parentVnode!.el === childVnode1!.el); // true
+console.log(middleVnode!.el === childVnode1!.el); // true
+
+value.value = false
+await nextTick()
+console.log(parentVnode!.el === childVnode2!.el); // true
+console.log(middleVnode!.el === childVnode2!.el); // true
+```  
+
+在更新 `Child` 时，已经运行完了 `div` 和 `span` 的 `patch`，接下来会执行 `next.el = nextTree.el` 来更新最新 `vnode` 的 el 为 `span`，接着就到了更新 HOC 上层组件的地方 [updateHOCHostEl](#updateHOCHostEl)  
+
+1. 第一次循环：`vnode` 为 `Child`，`parent` 为 `Middle` 组件，此时 `Child` 的确是 `Middle` 的子节点，所以将 `vnode` 修改为 `Middle`，再将其 `el` 修改为 `span`，`parent` 向上移动为 `Parent`  
+2. 第二次循环：`vnode` 为 `Middle`，`parent` 为 `Parent` 组件，此时 `Middle` 的确是 `Parent` 的子节点，所以将 `vnode` 修改为 `Parent`，再将其 `el` 修改为 `span`，`parent` 向上移动为 `null`，停止循环  
+
+最终，将 `Middle` 和 `Parent` 两个 `vnode.el` 也指向了 `span`  

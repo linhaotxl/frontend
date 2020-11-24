@@ -21,6 +21,7 @@
     - [hasPropsChanged](#haspropschanged)
 - [示例](#示例)
     - [HOC更新](#hoc更新)
+    - [invalidateJob示例](#invalidatejob示例)
 
 <!-- /TOC -->
 
@@ -709,6 +710,8 @@ const updateComponent = (n1: VNode, n2: VNode, optimized: boolean) => {
 
 可以看到，首先会通过 [shouldUpdateComponent](#shouldUpdateComponent) 函数来决定是否更新，如果一个组件的 props 没有发生任何变化，那么它就不应该被更新  
 
+注意，在更新普通组件时，会先将 `queue` 队列中的 `update` 函数暂停，之后手动调用一次，从而实现更新，具体可以参考[示例](#invalidateJob示例)  
+
 ## shouldUpdateComponent  
 这个函数用来检测一个组件是否需要更新  
 
@@ -862,3 +865,68 @@ console.log(middleVnode!.el === childVnode2!.el); // true
 2. 第二次循环：`vnode` 为 `Middle`，`parent` 为 `Parent` 组件，此时 `Middle` 的确是 `Parent` 的子节点，所以将 `vnode` 修改为 `Parent`，再将其 `el` 修改为 `span`，`parent` 向上移动为 `null`，停止循环  
 
 最终，将 `Middle` 和 `Parent` 两个 `vnode.el` 也指向了 `span`  
+
+
+## invalidateJob示例  
+
+```typescript
+const renderFn = jest.fn();
+const clickFn = jest.fn();
+
+const dir = {}
+
+const Child = {
+    setup () {
+        const count = inject( 'count' );
+        
+        return { count }
+    },
+    render ( this: any ) {
+        renderFn();
+        return h('span', null, this.count);
+    }
+};
+const Comp = {
+    setup () {
+        const count = ref(1);
+        const handleClick = () => {
+            count.value++;
+            clickFn();
+        }
+        provide( 'count', count )
+
+        return { count, handleClick }
+    },
+    components: { Child },
+    render ( this: any ) {
+        return [
+            h('div', { onClick: this.handleClick }, this.count ),
+            withDirectives(h(Child), [
+                [ dir ]
+            ])
+        ];
+    }
+};
+
+const root = document.createElement('div');
+render(h(Comp), root);
+
+const clickEvent = new CustomEvent('click');
+root.children[0].dispatchEvent( clickEvent );
+
+await nextTick();
+
+expect(clickFn).toBeCalledTimes(1);
+expect(renderFn).toBeCalledTimes(2);
+```   
+
+由于 `Child` 组件注入了 `count` 响应对象，所以 `count` 响应对象的依赖就有两个，一个是 `Comp` 组件的更新函数，一个是 `Child` 组件的更新函数  
+
+之后在点击 `div` 更新 `count` 的时候，异步队列中就存在两个任务( 分别更新 `Comp` 和 `Child` )
+
+第一个任务：在更新 `Comp` 组件的过程中，会再一次执行 `render` 获取子节点，并 `patch` 每一个子节点，`patch` 到 `Child` 时，此时会将异步队列中更新 `Child` 的任务暂停，之后继续 patch `Child` 节点  
+第二个任务：此时第二个任务已经被暂停了，所以不会执行  
+
+如果不暂停的话，那么 `Child` 的更新函数就会执行两次了  
+
+**父组件更新，导致子组件更新的情况下，会将任务队列中更新子组件的函数暂停，再手动调用一次更新函数进行更新**  

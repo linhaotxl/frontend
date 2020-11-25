@@ -128,7 +128,7 @@ export function renderComponentRoot(
             }
         }
 
-        // 继承指令
+        // 子节点继承指令
         if (vnode.dirs) {
             root.dirs = vnode.dirs
         }
@@ -155,7 +155,9 @@ export function renderComponentRoot(
 ```  
 
 <!-- TODO: -->
-**注意，如果组件发生了透传，那么新 vnode 中，patchFlag 就会存在 PatchFlags.FULL_PROPS，这是在 [cloneVNode](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#cloneVNode) 中发生的**  
+**注意**  
+1. 如果组件发生了透传，那么新 vnode 中，patchFlag 就会存在 PatchFlags.FULL_PROPS，这是在 [cloneVNode](https://github.com/linhaotxl/frontend/blob/master/packages/vue/shared/README.md#cloneVNode) 中发生的  
+2. 组件上的指令最终会被元素子节点继承  
 
 ## getFunctionalFallthrough  
 获取没有声明 `props` 的函数组件，需要透传的属性集合，只会透传 `class`、`style` 以及事件函数  

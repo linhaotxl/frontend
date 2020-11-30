@@ -51,3 +51,6 @@
         * [指令](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/element/directive/README.md)
 
     4. [Fragment 的渲染](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/fragment/README.md)
+
+5. 其他  
+    1. [watch Api](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/watch/README.md)

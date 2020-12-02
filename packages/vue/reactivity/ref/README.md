@@ -22,8 +22,10 @@
 - [unref](#unref)
 - [proxyRefs](#proxyrefs)
     - [shallowUnwrapHandlers](#shallowunwraphandlers)
-    - [示例](#示例)
 - [toRefs](#torefs)
+    - [toRef](#toref)
+- [示例](#示例)
+    - [toRefs使用](#torefs使用)
 
 <!-- /TOC -->
 
@@ -172,6 +174,7 @@ class CustomRefImpl<T> {
 ## 对象型  
 
 ### ObjectRefImpl  
+这是一个对象型的 `ref`，这个 `ref` 会持有对象的引用，这样，通过 `.value` 操作 `ref`，实际上就是在操作原对象，主要用在 [toRef](#toRef) 中  
 
 ```typescript
 class ObjectRefImpl<T extends object, K extends keyof T> {
@@ -251,53 +254,105 @@ const shallowUnwrapHandlers: ProxyHandler<any> = {
 }
 ```  
 
-## 示例  
+# toRefs  
+这个函数会将对象里的每个属性值转换为一个 `ref` 对象，这个 `ref` 对象持有原始对象的引用，所以无论修改原始对象还是产物 `ref` 对象，都是同一个地址，最终返回一个同名属性的对象，使用可以参考 [示例](#toRefs使用)  
 
 ```typescript
-const original = {
-	name: ref('IconMan'),
-	age: 24
-};
-const observer = proxyRefs(original);
-
-observer.name = 'Nicholas';	// 通过 ref 修改，触发收集的依赖
-observer.age = 30;			// 直接修改 age 为 30
+export function toRefs<T extends object>(object: T): ToRefs<T> {
+	// 参数必须是响应对象
+	if (__DEV__ && !isProxy(object)) {
+		console.warn(`toRefs() expects a reactive object but received a plain one.`)
+	}
+	const ret: any = isArray(object) ? new Array(object.length) : {}
+	// 遍历参数，调用 toRef 为每个 key 生成产物
+	for (const key in object) {
+		ret[key] = toRef(object, key)
+	}
+	return ret
+}
 ```  
 
-# toRefs
 
-<!-- ## customRef  
-这个方法用来定义自定义的 `ref` 对象，接受一个回调作为参数，回调有两个参数  
-1. 追踪 `value` 的方法  
-2. 触发 `value` 追踪的依赖  
-
-并且回调要返回一个含有 `get` 和 `set` 方法的对象，这两个方法会在获取和设置 `ref` 的时候被调用  
+## toRef
+这个函数会将对象中的指定属性，转换为一个 `ref` 对象，该 `ref` 对象持有原对象的引用，通过 `.value` 读取、访问，实际都是对原对象的操作  
 
 ```typescript
-let count: number = 1;
-let dummy: number = 0;
-const customerRef = customRef(( track, trigger ) => ({
-  get () {
-    track();
-    return count;
-  },
-  set ( value: number ) {
-    count = value;
-    trigger();
-  }
-}));
+export function toRef<T extends object, K extends keyof T>(object: T, key: K): Ref<T[K]> {
+	// 如果值本身就是一个 ref 对象，那么不用再做处理，否则生成一个 ObjectRefImpl 实例
+	return isRef(object[key])
+		? object[key]
+		: (new ObjectRefImpl(object, key) as any)
+}
+```  
 
-effect(() => {
-  dummy = customerRef.value;
-});
+# 示例  
+## toRefs使用  
 
-customerRef.value === 1;  // true
-dummy === 1;              // true
+例如有以下组件  
 
-customerRef.value = 2;
+```vue
+<template>
+	<div>
+		<p>{{ info.name }}</p>
+		<p>{{ info.age }}</p>
 
-customerRef.value === 2;  // true
-dummy === 2;              // true
-```
+		<button @click="info.name = 'IconMan'">修改名称</button>
+		<button @click="info.age = 20">修改名称</button>
+	</div>
+</template>
 
-注意: 在 `set` 方法中，一定要先设置值，再触发依赖，因为触发依赖是同步执行的，所以在执行依赖前要修改掉 -->
+<script>
+import { reactive } from 'vue';
+
+export default {
+	setup () {
+		const info = reactive({
+			name: 'Nicholas',
+			age: 18
+		});
+
+		return { info };
+	}
+}
+</script>
+```  
+
+现在访问、修改姓名、年龄都要通过 `info` 来访问，如果可以跳过 `info` 岂不是更快捷，此时可以通过 [toRefs](#toRefs) 将 `info` 中的值都转换为响应式的 `ref` 对象，例如下面这样  
+
+```vue
+<template>
+  <div>
+		<p>{{ name }}</p>
+		<p>{{ age }}</p>
+
+		<button @click="name = 'IconMan'">修改名称</button>
+		<button @click="age = 20">修改名称</button>
+	</div>
+</template>
+
+<script>
+import { reactive, toRefs } from 'vue';
+
+export default {
+	setup () {
+		const info = reactive({
+			name: 'Nicholas',
+			age: 18
+		});
+
+		return { ...toRefs(info) };
+	}
+}
+</script>
+```  
+
+现在转换的结果就是这样  
+
+```typescript
+{
+	name: ObjectRefImpl,
+	age: ObjectRefImpl,
+}
+```  
+
+并且这两个 `ref` 中的 `_object` 就指向了 `info`，所以在模板中，通过 `name` 无论是获取还是修改，实际访问到的都是 `info.name`  

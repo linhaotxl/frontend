@@ -19,6 +19,10 @@
     - [数组查找元素](#数组查找元素)
     - [修改数组的length禁止追踪](#修改数组的length禁止追踪)
     - [访问 __proto__](#访问-__proto__)
+    - [设置原始值](#设置原始值)
+    - [对象内设置ref的值](#对象内设置ref的值)
+    - [ref自动解包](#ref自动解包)
+    - [target和receiver](#target和receiver)
 
 <!-- /TOC -->
 
@@ -121,7 +125,7 @@ const shallowReadonlyGet = /*#__PURE__*/ createGetter(true, true)
  */
 function createGetter(isReadonly = false, shallow = false) {
     return function get(target: Target, key: string | symbol, receiver: object) {
-        // 检测属性来源，主要用于 isReactive、isReadonly 中
+        // ① 检测属性来源，主要用于 isReactive、isReadonly 中
         if (key === ReactiveFlags.IS_REACTIVE) {
             return !isReadonly
         } else if (key === ReactiveFlags.IS_READONLY) {
@@ -153,7 +157,7 @@ function createGetter(isReadonly = false, shallow = false) {
             return res
         }
 
-        // 非只读响应，开始对 target 的 key 进行追踪
+        // 只会追踪 非只读响应对象
         if (!isReadonly) {
             track(target, TrackOpTypes.GET, key)
         }
@@ -163,13 +167,16 @@ function createGetter(isReadonly = false, shallow = false) {
             return res
         }
 
+        // 如果获取到的结果是 ref 对象，那么会根据情况进行 “解包”，即直接返回 ref.value
         if (isRef(res)) {
-            // ref unwrapping - does not apply for Array + integer key.
+            // ② 解包需要满足以下条件
+            // 1. 在非数组中获取到的是 ref 对象
+            // 2. 在数组中访问的属性不是索引
             const shouldUnwrap = !targetIsArray || !isIntegerKey(key)
             return shouldUnwrap ? res.value : res
         }
 
-        // 如果 res 是个对象，则再根据是否只读对其进行响应化，并返回结果
+        // 如果 res 是个对象，则再根据是否只读对其进行响应化，并返回响应对象
         if (isObject(res)) {
             return isReadonly ? readonly(res) : reactive(res)
         }
@@ -181,6 +188,7 @@ function createGetter(isReadonly = false, shallow = false) {
 ```  
 
 1. 在 [isReadonly](#isReadonly)、[isReactive](#isReactive) 中都会访问 `IS_READONLY`、`IS_REACTIVE` 属性，此时就会被拦截，而结果就取决于闭包参数中的 `isReadonly`，只要不是只读，就是响应式的  
+2. 在 ② 处，会自动将 `ref` 进行 “解包” 操作，参考 [示例](#ref自动解包)  
 
 ### arrayInstrumentations  
 这个对象里拦截了数组的几个函数，扩展了一些额外功能，当我们通过数组调用这些函数时，实际上调用的是拦截的函数了，而不是原始的  
@@ -255,15 +263,11 @@ function createSetter( shallow = false ) {
         // 获取旧的值
         const oldValue = (target as any)[key]
 
-        // 默认情况下，如果 setter 的值是一个响应式对象，其实真正设置的是它的原始对象
-        // reactive.spec.ts -> 7
         if ( !shallow ) {
+            // ①
             value = toRaw( value )
 
-            // 检测 ref 作为对象的属性值，通过对象.属性名 的方式修改 ref 的值
-            // 此时需要通过 ref 的 setter 方法来修改，而不能执行下面的修改逻辑（ 会替换掉原来的 ref ）
-            // TODO 为什么需要判断 !isArray( target ) 和 !isRef( value )
-            // ref.spec.ts -> 5
+            // ②
             if ( !isArray( target ) && isRef( oldValue ) && !isRef( value ) ) {
                 oldValue.value = value
                 return true
@@ -272,17 +276,20 @@ function createSetter( shallow = false ) {
             // in shallow mode, objects are set as-is regardless of reactive or not
         }
 
+        // 检测设置的 key 是否存在（是新增还是更新）
         const hadKey = isArray(target) && isIntegerKey(key)
             ? Number(key) < target.length
             : hasOwn(target, key)
 
         const result = Reflect.set(target, key, value, receiver)
         
-        // don't trigger if target is something up in the prototype chain of original
+        // ③
         if (target === toRaw(receiver)) {
             if (!hadKey) {
+                // 触发新增 key 的依赖
                 trigger(target, TriggerOpTypes.ADD, key, value)
             } else if (hasChanged(value, oldValue)) {
+                // 更新的值发生变化，触发更新 key 的依赖
                 trigger(target, TriggerOpTypes.SET, key, value, oldValue)
             }
         }
@@ -291,6 +298,10 @@ function createSetter( shallow = false ) {
     }
 }
 ```  
+
+1. 在 ① 处，`value` 有可能是一个响应对象，会将其转换为原始对象，在之后设置的时候，实际设置的都是原始值而非响应值，可以参考 [示例](#设置原始值)  
+2. 在 ② 处，如果在一个对象内，给一个 `ref` 属性设置值，实际会通过 `ref` 对象的代理，而不是通过 `setter` 来实现，可以参考 [示例](#对象内设置ref的值)  
+3. 在 ③ 处，只有调用者对象和被修改的对象 是同一个响应对象，那么才会成功触发追踪的依赖，可以参考 [示例](#target和receiver)  
 
 ## has 拦截  
 `has` 会拦截 `prop in obj` 操作，当触发 `in` 操作时，就会追踪指定的属性  
@@ -374,3 +385,129 @@ expect(counterSpy2).toHaveBeenCalledTimes(1)
 const reactiveObj = reactive({})
 expect(reactiveObj['__proto__']).toBe(Object.prototype)
 ```  
+
+## 设置原始值  
+```typescript
+const obj1 = {}
+const obj2 = {}
+const arr = reactive([obj1, obj2])
+
+let index: number = -1
+effect(() => {
+    index = arr.indexOf(obj1)
+})
+expect(index).toBe(0)
+arr.reverse()
+expect(index).toBe(1)
+```  
+
+在 `indexOf` 函数中，会对每个索引进行追踪，而在接下来的 `reverse` 函数中，会分别获取每个索引的值，**注意这里获取到的每个值都是响应对象**，然后会将索引 `1` 的值赋值给索引 `0`，索引 `0` 的值负赋值给索引 `1`，从而触发 `setter`  
+在 `setter` 中会将值(这里是响应对象)转换为原始对象，所以设置的其实还是 `obj1` 和 `obj2`，而非它们的响应对象，如果不做这一步，那么设置的就是 `obj1` 和 `obj2` 的响应对象了，最后的 `index` 就是 `-1` 了  
+
+```typescript
+const original: any = { foo: 1 }
+const original2 = { bar: 2 }
+const observed = reactive(original)
+const observed2 = reactive(original2)
+observed.bar = observed2
+expect(observed.bar).toBe(observed2)
+expect(original.bar).toBe(original2)
+```  
+
+## 对象内设置ref的值   
+```typescript
+const a = ref(1)
+const b = { c: a }
+const obj = reactive({
+    a,
+    b
+})
+
+effect(() => {
+    dummy1 = obj.a
+    dummy2 = obj.b.c 
+});
+
+a.value++;
+obj.b.c++;
+```  
+
+首先在 `effect` 内部会追踪 `obj` 的 `a` 和 `b`，`b` 的 `c`，以及 `a.value` 这几个属性  
+通过 `a.value++` 修改，会被 `ref` 的 `setter` 拦截，从而触发依赖  
+通过 `obj.b.c++` 修改，会进入 `reactive` 的 `setter`，此时原始对象 `b` 不是数组，且旧值 `c` 是一个 `ref` 对象，新值 `2` 不是一个 `ref` 对象，所以会进入 ② 的逻辑，其实这就是修改对象中的 `ref` 的值，所以应该有 `ref` 的 `setter` 来处理 
+
+## ref自动解包  
+
+```typescript
+const a = { b: ref(0) };
+const c = ref(a)
+
+// 原始对象为普通对象，发生自动解包
+expect(c.value.b).toBe(0);
+```  
+
+```typescript
+const arr = ref([1, ref(3)]).value
+expect(isRef(arr[0])).toBe(false)
+// 原始对象为数组，且访问的是索引，不会发生自动解包
+expect(isRef(arr[1])).toBe(true)
+expect((arr[1] as Ref).value).toBe(3)
+```  
+
+```typescript
+const arr = [ref(0)]
+const symbolKey = Symbol('')
+arr['' as any] = ref(1)
+arr[symbolKey as any] = ref(2)
+
+const arrRef = ref(arr).value
+
+// 原始对象为数组，且访问的是索引，不会发生自动解包
+expect(isRef(arrRef[0])).toBe(true)
+
+// 原始对象为数组，且访问的不是索引，发生自动解包
+expect(isRef(arrRef['' as any])).toBe(false)
+expect(isRef(arrRef[symbolKey as any])).toBe(false)
+expect(arrRef['' as any]).toBe(1)
+expect(arrRef[symbolKey as any]).toBe(2)
+```  
+
+## target和receiver  
+
+```typescript
+let dummy, parentDummy, hiddenValue: any
+const children = reactive<{ prop?: number, type: string; }>({ type: 'children' })
+const parent = reactive({
+    set prop(value) {
+        hiddenValue = value
+    },
+    get prop() {
+        return hiddenValue
+    },
+    type: 'parent'
+})
+// children 继承 parent
+Object.setPrototypeOf(children, parent)
+effect(() => (dummy = children.prop))       // 追踪 children.prop，parent.prop
+effect(() => (parentDummy = parent.prop))   // 追踪 parent.prop
+
+expect(dummy).toBe(undefined)
+expect(parentDummy).toBe(undefined)
+
+children.prop = 4
+expect(dummy).toBe(4)
+// this doesn't work, should it?
+// expect(parentDummy).toBe(4)
+parent.prop = 2
+expect(dummy).toBe(2)
+expect(parentDummy).toBe(2)
+```  
+
+在更新 `children.prop = 4` 时，由于是 `children` 触发的 `setter`，所以 `receiver` 就是 `children`  
+由于 `children` 没有 `prop` 而 `parent` 存在 `prop` 的读取操作，所以当触发更新操作 `Reflect.set(target, key, value, receiver)` 时，会进入到 `parent` 的 `setter`  
+ * 而此时 `target` 是 `parent`，和 `receiver` 不相同，所以更新成功后不会触发依赖  
+
+回到 `children` 的 `setter` 中，更新完成后触发 `children` 的依赖，修改 `dummy`，而 `parentDummy` 不变  
+
+**对象自身修改自身的属性，才会触发追踪的依赖**  
+

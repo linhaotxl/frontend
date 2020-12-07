@@ -19,6 +19,8 @@
         - [stop](#stop)
 - [示例](#示例)
     - [清除追踪](#清除追踪)
+    - [直接修改数组length](#直接修改数组length)
+    - [过滤正在执行的effect](#过滤正在执行的effect)
 
 <!-- /TOC -->
 
@@ -205,6 +207,12 @@ export function resetTracking() {
 这个函数主要在获取响应对象的属性时被调用，从而追踪
 
 ```typescript
+/**
+ * 追踪属性
+ * @param { object }        target  // 原始对象
+ * @param { TrackOpTypes }  type    // 追踪类型
+ * @param { unknown }       key     // 追踪属性
+ */
 export function track(target: object, type: TrackOpTypes, key: unknown) {
     // 如果当前暂停了追踪，或者当前没有正在执行的 effect，那么直接退出，不需要追踪
     if ( !shouldTrack || activeEffect === undefined ) {
@@ -246,6 +254,122 @@ export function track(target: object, type: TrackOpTypes, key: unknown) {
 1. 在 ① 处，会将 “对象下的属性” 集合存入 `effect` 函数内，这一步主要的作用在于 [清除追踪的属性](#cleanUp) 内  
 
 ### trigger  
+当修改了监听的值时，就会通过这个方法，触发追踪的 `effect` 函数，从而执行副作用函数；在 `reactive`、`ref` 中的 `setter` 都会执行  
+
+```typescript
+export function trigger(
+    target: object,
+    type: TriggerOpTypes,
+    key?: unknown,
+    newValue?: unknown,
+    oldValue?: unknown,
+    oldTarget?: Map<unknown, unknown> | Set<unknown>
+) {
+    // 从 targetMap 中获取 “监听对象” 集合
+    const depsMap = targetMap.get(target)
+    if (!depsMap) {
+        // 如果不存在，则说明还没有对属性 key 进行追踪，直接退出
+        return
+    }
+
+    // 定义需要执行的 effect 函数集合，即操作属性 key 会导致哪些 effect 函数被调用，后面会里面添加
+    const effects = new Set<ReactiveEffect>()
+
+    // ①
+    // 向 effects 集合中添加 effect 函数
+    const add = (effectsToAdd: Set<ReactiveEffect> | undefined) => {
+        if ( effectsToAdd ) {
+            effectsToAdd.forEach(effect => {
+                // 过滤掉正在触发的 effect 内，例如在一个 effect 内，先追踪了依赖，再触发了依赖
+                if (effect !== activeEffect || effect.options.allowRecurse) {
+                    effects.add(effect)
+                }
+            })
+        }
+    }
+
+    // 处理不同的操作
+    if ( type === TriggerOpTypes.CLEAR ) {
+        // ②
+        // 针对 Map 和 Set 的 clear 操作，此时清除了所有数据，所以需要触发所有追踪的属性，遍历 “属性集合”，将每一个 effect 函数都加入到 effects 中
+        depsMap.forEach( add )
+    } else if (key === 'length' && isArray(target)) {
+        // ③
+        // 针对直接修改数组的 length 属性
+        depsMap.forEach((dep, key) => {
+            if (key === 'length' || key >= (newValue as number)) {
+                add(dep)
+            }
+        })
+    } else {
+        // 新增、更新、删除操作
+        // 对于新增的操作，由于 key 是新增的，所以 depsMap.get( key ) 是不存在的，所以这里什么也不会做
+        if ( key !== void 0 ) {
+            add( depsMap.get( key ) )
+        }
+
+        // 向 effects 集合中添加遍历的 effect 函数，当存在新增、删除时就需要触发遍历的 effect 函数
+        switch (type) {
+            // 添加属性时
+            // 如果是普通对象会触发遍历(ITERATE_KEY) effect 函数，Map 还会多添加一个 MAP_KEY_ITERATE_KEY effect 函数
+            // 如果数组，并且添加的 key 是索引，那么会触发 length 的 effect 函数
+            case TriggerOpTypes.ADD:
+                if (!isArray(target)) {
+                    add(depsMap.get(ITERATE_KEY))
+                    if (isMap(target)) {
+                        add(depsMap.get(MAP_KEY_ITERATE_KEY))
+                    }
+                } else if (isIntegerKey(key)) {
+                    add(depsMap.get('length'))
+                }
+                break
+            // 删除属性时
+            // 如果是普通对象会触发遍历(ITERATE_KEY) effect 函数，Map 还会多添加一个 MAP_KEY_ITERATE_KEY effect 函数
+            // 通过 delete 删除数组元素，长度是不会改变的，所以不需要触发 length 的依赖
+            case TriggerOpTypes.DELETE:
+                if (!isArray(target)) {
+                    add(depsMap.get(ITERATE_KEY))
+                    if (isMap(target)) {
+                        add(depsMap.get(MAP_KEY_ITERATE_KEY))
+                    }
+                }
+                break
+            // Map 的更新新增都是通过 set 方法完成的，所以如果是 Map 的更新操作，也需要触发遍历(ITERATE_KEY) 的 effect 函数
+            case TriggerOpTypes.SET:
+                if (isMap(target)) {
+                    add(depsMap.get(ITERATE_KEY))
+                }
+                break
+        }
+    }
+
+    // 执行 effects 中的 effect 函数
+    const run = ( effect: ReactiveEffect ) => {
+        if (__DEV__ && effect.options.onTrigger) {
+            effect.options.onTrigger({
+                effect,
+                target,
+                key,
+                type,
+                newValue,
+                oldValue,
+                oldTarget
+            })
+        }
+        // 如果 effect 存在调度器 scheduler，就调用调度器，有调度器决定什么时候触发 effect 函数；否则就直接调用 effect 函数
+        if ( effect.options.scheduler ) {
+            effect.options.scheduler( effect )
+        } else {
+            effect()
+        }
+    }
+
+    effects.forEach(run)
+}
+```  
+
+1. 在 ① 处的 add 函数，遍历时进行过滤，一种是当前正在执行的 `effect` 函数，参考 [示例](#过滤正在执行的effect)  
+2. 在 ③ 处针对直接修改数组长度的情况，肯定需要触发追踪 length 的 effect，其次，修改长度后，从长度开始的索引一直到结尾，这区间的元素都会被删除，所以也需要触发这个区间追踪的 `effect` 函数，参考 [示例](#直接修改数组length)  
 
 ## 其他  
 
@@ -274,8 +398,25 @@ function cleanup( effect: ReactiveEffect ) {
 在 [targetMap](#targetMap) 属性集合中，可能会存在多个 `effect` 函数，这里仅仅删除了和当前相关的 `effect`，剩余的还是存在的  
 
 ### stop
+这个函数用来停止一个 `effect` 函数，停止后，这个 `effect` 函数会清空所有追踪的属性  
 
+```typescript
+export function stop(effect: ReactiveEffect) {
+    if (effect.active) {
+        // 清除追踪的属性
+        cleanup(effect)
+        // 执行停止钩子函数
+        if (effect.options.onStop) {
+            effect.options.onStop()
+        }
+        // 标识 effect 已经停止
+        effect.active = false
+    }
+}
+```  
 
+注意，如果一个 `effect` 停止后，它追踪的所有属性都会被清空，再次修改监听的值，在 [trigger](#trigger) 内也就无法找到 `effect` 函数了，也就无法再次执行
+但是仍然可以通过手动执行 `effect` 函数，来触发副作用函数，在 [createReactiveEffect](#createReactiveEffect) 中可以看到，调用一个停止的 `effect`，如果有调度器则什么也不会做，否则会调用原始副作用函数  
 
 # 示例  
 
@@ -341,4 +482,90 @@ expect(conditionalSpy).toHaveBeenCalledTimes(2)
 ```  
 
 最后在 ③ 处修改 prop 也就无法再次触发 `effect1` 了  
+
+## 直接修改数组length  
+
+```typescript
+const const original = [1, 2];
+const observal = reactive(original);
+let dummy, dummy0, dummy1, dummy2;
+
+// effect1 追踪 length
+const effect1 = effect(() => {
+    dummy = observal.length;
+});
+
+// effect2 追踪 0
+const effect2 = effect(() => {
+    dummy0 = observal[0];
+});
+
+// effect3 追踪 1
+const effect3 = effect(() => {
+    dummy1 = observal[1];
+});
+
+// effect4 追踪 2
+const effect4 = effect(() => {
+    dummy2 = observal[2];
+});
+
+expect(dummy).toBe(2);
+expect(dummy0).toBe(1);
+expect(dummy1).toBe(2);
+expect(dummy2).toBeUndefined();
+
+// 增加 2 属性，触发 length 和 2 对应的 effect 函数
+observal[2] = 3;
+
+expect(dummy).toBe(3);
+expect(dummy0).toBe(1);
+expect(dummy1).toBe(2);
+expect(dummy2).toBe(3);
+
+// ①
+observal.length = 1;
+
+expect(dummy).toBe(1);
+expect(dummy0).toBe(1);
+expect(dummy1).toBeUndefined();
+expect(dummy2).toBeUndefined();
+```  
+
+targetMap 是如下这样  
+
+```typescript
+{
+    original: {
+        length: [effect1],
+        0: [effect2],
+        1: [effect3],
+        2: [effect4],
+    }
+}
+```  
+
+在 ① 处修改长度，会进入 [trigger](#trigger) 的 ③ 处，会触发 `length`，以及大于等于长度 1 的索引(1, 2)，即触发 `effect1`、`effect2`、`effect3`  
+
+## 过滤正在执行的effect  
+
+```typescript
+const counter = reactive({ num: 0 })
+
+const counterSpy = jest.fn(() => {
+    counter.num++
+})
+
+// 追踪 num 属性
+const effect1 = effect(counterSpy)
+expect(counter.num).toBe(1)
+expect(counterSpy).toHaveBeenCalledTimes(1)
+
+counter.num = 4
+
+expect(counter.num).toBe(5)
+expect(counterSpy).toHaveBeenCalledTimes(2)
+```  
+
+在执行副作用中，`activeEffect` 就是 `effect1`，首先追踪了 `num` 属性，接着又对其进行了修改，通过 [trigger](#trigger) 触发追踪 `num` 的 `effect`，但是追踪 `num` 的 `effect` 和当前正在执行的 `activeEffect` 是同一个，所以不会触发任何的 `effect` 函数  
 

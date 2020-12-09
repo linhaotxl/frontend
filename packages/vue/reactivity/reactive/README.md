@@ -10,7 +10,7 @@
     - [targetTypeMap](#targettypemap)
     - [isReadonly](#isreadonly)
     - [isReactive](#isreactive)
-        - [toRaw](#toraw)
+    - [toRaw](#toraw)
     - [markRaw](#markraw)
 - [各种类型的响应对象](#各种类型的响应对象)
     - [reactive](#reactive)
@@ -194,7 +194,7 @@ readonlyToRaw: Map { c -> b }
 
 所以这一步的目的就在于处理这种情况（ 参数是一个经过 `readonly` 的普通响应对象 ），会先获取它的原始对象（ 这个原始对象会是一个普通的响应对象 ），然后实际检测的是这个普通的响应对象 -->
 
-### toRaw  
+## toRaw  
 这个方法会获取 *响应对象* 的 *原始对象*，如果不是就会返回参数自身  
 
 ```typescript
@@ -205,12 +205,32 @@ export function toRaw<T>(observed: T): T {
 }
 ```  
 
-<!-- 为什么会先从 `readonlyToRaw` 获取一次？还是看上面的示例  
+可以看到，获取 *原始对象* 其实就是获取 `ReactiveFlags.RAW` 的值，这个值最终会被拦截对象所拦截，这里针对两种情况一个一个看  
+
+1. [非集合拦截参考](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/baseHandlers/README.md#get-%E6%8B%A6%E6%88%AA)  
+2. [集合拦截参考](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/baseHandlers/README.md#get-%E6%8B%A6%E6%88%AA)
+
+可以看到，`ReactiveFlags.RAW` 最终返回的是原始对象 `target`，然后又对返回值调用 `toRaw` 方法，再次获取 `ReactiveFlags.RAW` 的值，一直重复这个过程，直至结果不再是一个响应对象，那么这个值也就是最终的 *原始对象*  
+
+**`toRaw` 会递归获取原始对象**  
+
+假如现在有以下代码  
+
 ```typescript
-toRaw( b ) === toRaw( c );  // true
+const original = {};
+const observal = reactive(original);
+const observalR = readonly(observal);
+
+expect(toRaw(observalR)).toBe(original);
 ```  
-原理和 `isReactive` 相似，在示例中，`b` 和 `c` 的原始对象应该都是同一个，因为 `c` 只是将 `b` 变为只读  
-所以在源码中，如果参数是一个经过 `readonly` 的 “普通响应对象”，会先获取它的原始对象（ 这个原始对象是一个响应对象 ），然后实际获取的是这个 “普通响应对象” 的原始值   -->
+
+转换过程为  
+1. 获取 `observalR` 的 `[ReactiveFlags.RAW]`，得到 `observal`，再对 `observal` 进行 `toRaw` 操作  
+2. 获取 `observal` 的 `[ReactiveFlags.RAW]`，得到 `original`，再对 `observal` 进行 `toRaw` 操作  
+3. 获取 `original` 的 `[ReactiveFlags.RAW]`，得到 `undefined`，返回 `undefined`    
+4. 第二步中得到的是 `undefined`，所以返回 `original`，同理第一步  
+
+那如果就是想获取 `observalR` 的原始对象 `observal` 呢，可以直接访问 `[ReactiveFlags.RAW]` 得到  
 
 ## markRaw  
 通常，普通的对象是可以进行响应化的，但是我们可以通过这个方法，将某个对象标记为原始类型，即这个对象就无法再被响应化了  

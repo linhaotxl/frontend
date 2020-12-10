@@ -10,8 +10,16 @@
     - [readonlyInstrumentations](#readonlyinstrumentations)
 - [拦截方法](#拦截方法)
     - [get](#get)
-- [示例](#示例)
-    - [get的兼容](#get的兼容)
+    - [set](#set)
+    - [add](#add)
+    - [has](#has)
+    - [deleteEntry](#deleteentry)
+    - [size](#size)
+    - [clear](#clear)
+    - [forEach](#foreach)
+    - [迭代器](#迭代器)
+        - [迭代器创建](#迭代器创建)
+        - [createIterableMethod](#createiterablemethod)
 
 <!-- /TOC -->
 
@@ -40,10 +48,10 @@
     }
     ```
 
-可以发现，不管哪一种拦截对象，都值拦截了 `get` 操作，这是因为集合对象不管是新增、更新、检测是否存在以及删除，都必须要通过方法来实现，无法通过执行命令实现，例如 `delete`、`in` 等  
+可以发现，不管哪一种拦截对象，都只拦截了 `get` 操作，这是因为集合对象不管是新增、更新、检测是否存在以及删除，都必须要通过方法来实现，无法通过执行命令实现，例如 `delete`、`in` 等  
 
 ## createInstrumentationGetter  
-这个函数用于创建 `get` 的拦截  
+这个函数用于创建 `get` 的拦截函数  
 
 ```typescript
 /**
@@ -85,7 +93,7 @@ function createInstrumentationGetter(isReadonly: boolean, shallow: boolean) {
 创建出来的 `get` 拦截函数只是一个通用的模板，具体会调用 `instrumentations` 里面的函数来执行真正的操作  
 
 # instrumentations  
-这个对象会根据是否只读，是否浅响应来设置，无非就是 `mutableInstrumentations`、`shallowInstrumentations`、readonlyInstrumentations 三个中的一个，这三个对象中会拦截集合对象的原生方法，例如 `get`、`set` 等等，所以我们实际调用的是这些函数  
+这个对象会根据是否只读，是否浅响应来设置，无非就是 `mutableInstrumentations`、`shallowInstrumentations`、`readonlyInstrumentations` 三个中的一个，这三个对象中会定义与原生方法同名的函数，例如 `get`、`set` 等等，所以我们实际调用的是这些函数，通过这些函数再去调用原生方法  
 
 ## mutableInstrumentations  
 这个对象用于非只读，非浅响应的普通对象中  
@@ -179,7 +187,7 @@ iteratorMethods.forEach(method => {
 # 拦截方法  
 
 ## get  
-定义了 `Map` 对象的 `get` 拦截  
+定义了 `Map` 对象的 `get` 拦截函数  
 
 ```typescript
 function get(
@@ -188,7 +196,7 @@ function get(
     isReadonly = false, // 是否只读 
     isShallow = false   // 是否浅响应
 ) {
-    // ① 这一步主要是处理 readonly(reactive(Map)) 的情况
+    // ① 将 target 重写为它的原始对象，这一步主要是处理 readonly(reactive(Map)) 的情况
     target = (target as any)[ReactiveFlags.RAW]
 
     // 获取 target 原始对象和原始 key
@@ -215,25 +223,275 @@ function get(
 }
 ```  
 
-1. ① 处的目的是为了兼容 `readonly(reactive(new Map()))` 这种情况，如果对一个已经是响应化的数据再次 `readonly`，那么获取值应该也是能获取到的，参考 [示例](#get的兼容)  
+1. ① 处的目的是为了兼容 `readonly(reactive(new Map()))` 这种情况，看下面的代码  
 
-# 示例  
+    ```typescript
+    const map = new Map()
+    const observal = reactive()
+    const roObserval = readonly(map)
 
-## get的兼容  
+    const key = {}
+    map.set(key, {})
+
+    // ①
+    const item = observal.get(key)
+    expect(isReactive(item)).toBe(true)
+    expect(isReadonly(item)).toBe(false)
+
+    // ②
+    const roItem = roObserval.get(key)
+    expect(isReactive(roItem)).toBe(true)
+    expect(isReadonly(roItem)).toBe(true)
+    ```  
+
+    由于 `roItem` 是只读响应对象，所以取出的值应该也是只读的响应对象  
+    
+    通过 `observal` 获取 `key`，`target` 就是 `map`，从 `map` 中取出的结果会被 `toReactive` 包裹成为一个响应对象  
+    通过 `roObserval` 获取 `key`，`target` 会被重写为 `observal`，最终结果会被 `toReadonly` 包裹成为一个只读响应对象  
+
+    Q：如果删除这句 `target = (target as any)[ReactiveFlags.RAW]` 可以吗  
+    A：不行，如果删除，对于示例中的 ① 这种情况，会进入死循环：`target` 始终是一个响应对象，在最后通过 `target.get` 获取值的时候，又会进入 `get` 拦截，一直重复这个过程  
+
+    Q：如果将 `target = (target as any)[ReactiveFlags.RAW]` 替换为 `target = toRaw(target)` 可以吗  
+    A：不行，通过 [toRaw](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/reactive/README.md#toraw) 的递归性，得到的将是最终的 原始对象 `map`，这样在最后 `target.get` 的时候，结果只是一个只读响应对象，这是通不过 `isReactive` 测试的  
+
+## set  
+定义了 `Map` 的 `set` 拦截函数  
 
 ```typescript
-const map = new Map()
-const observal = reactive()
-const roMap = readonly(map)
+function set(this: MapTypes, key: unknown, value: unknown) {
+    // 将设置的值转换为原始值
+    value = toRaw(value)
+    const target = toRaw(this)
+    const { has, get } = getProto(target)
 
-const key = {}
-map.set(key, {})
+    // 检查是新增还是更新操作，用于之后 trigger 的类型
+    let hadKey = has.call( target, key )
 
-// ①
-const roItem = roMap.get(key)
+    if ( !hadKey ) {
+        // 将 key 转换为原始值，再次检查是否存在
+        key = toRaw( key )
+        hadKey = has.call( target, key )
+    } else if (__DEV__) {
+        checkIdentityKeys(target, has, key)
+    }
 
-expect(isReactive(roItem)).toBe(true)
-expect(isReadonly(roItem)).toBe(true)
+    const oldValue = get.call(target, key)
+    const result = target.set(key, value)
+    if (!hadKey) {
+        // 新增
+        trigger(target, TriggerOpTypes.ADD, key, value)
+    } else if (hasChanged(value, oldValue)) {
+        // 更新
+        trigger(target, TriggerOpTypes.SET, key, value, oldValue)
+    }
+
+    return result
+}
 ```  
 
-通过 `roMap` 获取 `key` 时，会先使用 `roMap` 的原始对象(`observal`) 替换 `target`，接下来再获取 `target` 的原始对象(`map`)，
+**可以看到，`Map` 设置 `key` 和 `value`，不管是否是响应对象，最终实际设置的 `key` 和 `value` 都是原始值**  
+
+## add  
+定义了 `Set` 的 `add` 拦截函数  
+
+```typescript
+function add(this: SetTypes, value: unknown) {
+    // 将设置的值转换为原始值
+    value = toRaw(value)
+    const target = toRaw(this)
+    const proto = getProto(target)
+    const hadKey = proto.has.call(target, value)
+    const result = target.add(value)
+    if (!hadKey) {
+        // 触发新增
+        trigger(target, TriggerOpTypes.ADD, value, value)
+    }
+    return result
+}
+```  
+
+**和 [set](#set) 一样，设置的值也是原始值**  
+
+## has  
+定义了 `Map` 和 `Set` 的 `has` 拦截函数，如果参数 `key` 是一个响应对象，那么不仅会追踪原始对象，也会追踪这个响应对象   
+
+```typescript
+function has(this: CollectionTypes, key: unknown, isReadonly = false): boolean {
+    const target = (this as any)[ReactiveFlags.RAW]
+    const rawTarget = toRaw(target)
+    const rawKey = toRaw(key)
+    if (key !== rawKey) {
+        !isReadonly && track(rawTarget, TrackOpTypes.HAS, key)
+    }
+    !isReadonly && track(rawTarget, TrackOpTypes.HAS, rawKey)
+    return key === rawKey
+        ? target.has(key)
+        : target.has(key) || target.has(rawKey)
+}
+```  
+
+## deleteEntry  
+定义了 `Map` 和 `Set` 的 `delete` 拦截函数  
+
+```typescript
+function deleteEntry(this: CollectionTypes, key: unknown) {
+    const target = toRaw(this)
+    const { has, get } = getProto(target)
+
+    // 检测删除的 key 是否存在，不存在进行二次检测
+    let hadKey = has.call(target, key)
+    if (!hadKey) {
+        key = toRaw(key)
+        hadKey = has.call(target, key)
+    } else if (__DEV__) {
+        checkIdentityKeys(target, has, key)
+    }
+
+    // 获取删除前的值
+    // Map: 调用 get 方法获取
+    // Set: undefined
+    const oldValue = get ? get.call(target, key) : undefined
+   
+    // 调用原生方法执行删除操作
+    const result = target.delete(key)
+
+    if (hadKey) {
+        // 删除的是一个存在的值，触发删除操作
+        trigger(target, TriggerOpTypes.DELETE, key, undefined, oldValue)
+    }
+    
+    return result
+}
+```  
+
+## size  
+
+```typescript
+function size(target: IterableCollections, isReadonly = false) {
+    target = (target as any)[ReactiveFlags.RAW]
+    // 触发追踪遍历的 effect
+    !isReadonly && track(toRaw(target), TrackOpTypes.ITERATE, ITERATE_KEY)
+    // 从原始对象中获取 size
+    return Reflect.get(target, 'size', target)
+}
+```  
+
+## clear  
+
+```typescript
+function clear(this: IterableCollections) {
+    const target = toRaw(this)
+    const hadItems = target.size !== 0
+    const oldTarget = __DEV__
+        ? isMap(target)
+            ? new Map(target)
+            : new Set(target)
+        : undefined
+
+    // 调用原生方法实现清除
+    const result = target.clear()
+    
+    // 删除前存在内容，则触发 clear 的依赖，在 trigger 中，如果触发的是 clear 操作，那么会执行 target 所有的 effect
+    if (hadItems) {
+        trigger(target, TriggerOpTypes.CLEAR, undefined, undefined, oldTarget)
+    }
+
+    return result
+}
+```  
+
+## forEach  
+这是一个创建 `forEach` 的工厂函数，针对只读以及浅响应  
+
+```typescript
+function createForEach(isReadonly: boolean, isShallow: boolean) {
+    return function forEach(
+        this: IterableCollections,
+        callback: Function,
+        thisArg?: unknown
+    ) {
+        const observed = this as any
+        const target = observed[ReactiveFlags.RAW]
+        const rawTarget = toRaw(target)
+
+        // 根据是否只读，浅响应封装包装函数
+        const wrap = isReadonly ? toReadonly : isShallow ? toShallow : toReactive
+
+        // 追踪遍历操作
+        !isReadonly && track(rawTarget, TrackOpTypes.ITERATE, ITERATE_KEY)
+        
+        // 调用原生方法 forEach
+        // 回调接受到的 key 和 value 都是经过包装的响应对象
+        // 回调还接受第三个参数，即调用者自身
+        return target.forEach((value: unknown, key: unknown) => {
+            return callback.call(thisArg, wrap(value), wrap(key), observed)
+        })
+    }
+}
+```  
+
+## 迭代器  
+### 迭代器创建  
+
+一个对象要是能被 `for..of` 访问，就必须要设置 `Symbol.iterator`，首先访问 `Symbol.iterator` 获取迭代器对象，接着会调用迭代器对象中的 `next` 函数，如果返回的 `done` 为 `false` 并且 `value` 不为 `undefined`，那么就会进入一次循环体，循环体结束后，再次调用 `next` 函数获取下一次循环体的值，直至 `done` 为 `true` 结束  
+
+### createIterableMethod  
+这个函数是处理迭代器操作的工厂函数  
+
+```typescript
+function createIterableMethod(
+    method: string | symbol,
+    isReadonly: boolean,
+    isShallow: boolean
+) {
+    return function(
+        this: IterableCollections,
+        ...args: unknown[]
+    ): Iterable & Iterator {
+        const target = (this as any)[ReactiveFlags.RAW]
+        const rawTarget = toRaw(target)
+        const targetIsMap = isMap(rawTarget)
+        
+        // 检测是否是键值对的操作，Map 和 Set 的 entries 都是，同时还有 Map 的 for..of
+        const isPair = method === 'entries' || (method === Symbol.iterator && targetIsMap)
+        // 检测是否只是获取 key 的操作，只有在 Map.keys 属于
+        const isKeyOnly = method === 'keys' && targetIsMap
+
+        // 通过原生方法获取迭代器对象
+        const innerIterator = target[method](...args)
+        
+        // 封装包装函数
+        const wrap = isReadonly ? toReadonly : isShallow ? toShallow : toReactive
+
+        !isReadonly &&
+        track(
+            rawTarget,
+            TrackOpTypes.ITERATE,
+            isKeyOnly ? MAP_KEY_ITERATE_KEY : ITERATE_KEY
+        )
+        
+        // 返回迭代器对象
+        return {
+            // 定义 next 方法
+            next() {
+                // 通过原生迭代器对象获取 done 和 value
+                const { value, done } = innerIterator.next()
+                return done
+                    // 如果已经结束，则直接返回
+                    ? { value, done }
+                    // 如果没有结束，则对每个值进行包装处理
+                    // isPair 为 true 则表示结束是 键值对，返回数据，否则直接返回值
+                    : {
+                        value: isPair ? [wrap(value[0]), wrap(value[1])] : wrap(value),
+                        done
+                    }
+            },
+            // 定义 Symbol.iterator，返回 this，即 return 的对象，从其中调用 next 函数
+            [Symbol.iterator]() {
+                return this
+            }
+        }
+    }
+}
+```  

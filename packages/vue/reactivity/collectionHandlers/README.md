@@ -2,6 +2,7 @@
 
 <!-- TOC -->
 
+- [工具函数](#工具函数)
 - [集合拦截对象](#集合拦截对象)
     - [createInstrumentationGetter](#createinstrumentationgetter)
 - [instrumentations](#instrumentations)
@@ -20,8 +21,41 @@
     - [迭代器](#迭代器)
         - [迭代器创建](#迭代器创建)
         - [createIterableMethod](#createiterablemethod)
+    - [createReadonlyMethod](#createreadonlymethod)
 
 <!-- /TOC -->
+
+# 工具函数  
+
+1. `toReactive`  
+转换为普通响应对象  
+
+    ```typescript
+    const toReactive = <T extends unknown>(value: T): T => isObject(value) ? reactive(value) : value
+    ```  
+
+2. `toReadonly`  
+转换为只读响应对象  
+
+    ```typescript
+    const toReadonly = <T extends unknown>(value: T): T => isObject(value) ? readonly(value as Record<any, any>) : value
+    ```  
+
+3. `toShallow`  
+转换为浅响应对象，由于浅响应对象不会深层处理，所以只需要获取自身即可  
+
+    ```typescript
+    const toShallow = <T extends unknown>(value: T): T => value
+    ```  
+
+4. `getProto`  
+获取原型对象，之后主要获取集合对象的原生方法  
+
+    ```typescript
+    const getProto = <T extends CollectionTypes>(v: T): any => Reflect.getPrototypeOf(v)
+    ```  
+
+
 
 # 集合拦截对象  
 1. 普通集合对象拦截 `mutableCollectionHandlers`  
@@ -51,7 +85,7 @@
 可以发现，不管哪一种拦截对象，都只拦截了 `get` 操作，这是因为集合对象不管是新增、更新、检测是否存在以及删除，都必须要通过方法来实现，无法通过执行命令实现，例如 `delete`、`in` 等  
 
 ## createInstrumentationGetter  
-这个函数用于创建 `get` 的拦截函数  
+这个函数是个工厂函数，用于创建 `get` 的拦截函数  
 
 ```typescript
 /**
@@ -65,6 +99,7 @@ function createInstrumentationGetter(isReadonly: boolean, shallow: boolean) {
             ? readonlyInstrumentations
             : mutableInstrumentations
 
+    // 实际的 get 拦截函数
     return (
         target: CollectionTypes,
         key: string | symbol,
@@ -159,10 +194,15 @@ const readonlyInstrumentations: Record<string, Function> = {
 
 **注意，在上上面的操作中，存在将 `this` 传递给函数的情况，这里的 `this` 指向的就是调用者响应对象**  
 
-最后，又为这三个对象添加了遍历相关的拦截  
+最后，又为这三个对象添加了 *迭代器* 相关的拦截  
 
 ```typescript
-const iteratorMethods = ['keys', 'values', 'entries', Symbol.iterator]
+const iteratorMethods = [
+    'keys',             // 获取键集合
+    'values',           // 获取值集合
+    'entries',          // 获取键值对集合
+    Symbol.iterator     // for..of 操作
+]
 iteratorMethods.forEach(method => {
     mutableInstrumentations[method as string] = createIterableMethod(
         method,
@@ -244,17 +284,15 @@ function get(
     expect(isReadonly(roItem)).toBe(true)
     ```  
 
-    由于 `roItem` 是只读响应对象，所以取出的值应该也是只读的响应对象  
+    通过 `observal` 获取 `key`，`target` 本来是 `observal`，接着被重写为 `map`，`rawTarget` 也就是 `map` 了，再从 `target` 中取出的结果会被 `toReactive` 包裹成为一个响应对象  
+    通过 `roObserval` 获取 `key`，`target` 本来是 `roObserval`，会被重写为 `observal`，`rawTarget` 也就是 `map` 了，再从 `target` 中取出结果，又触发了拦截，实际是从 `observal` 取出值，返回一个响应对象，最后再将响应对象通过 `toReadonly` 进行响应化  
     
-    通过 `observal` 获取 `key`，`target` 就是 `map`，从 `map` 中取出的结果会被 `toReactive` 包裹成为一个响应对象  
-    通过 `roObserval` 获取 `key`，`target` 会被重写为 `observal`，最终结果会被 `toReadonly` 包裹成为一个只读响应对象  
-
-    Q：如果删除这句 `target = (target as any)[ReactiveFlags.RAW]` 可以吗  
+    *Q1*：如果删除这句 `target = (target as any)[ReactiveFlags.RAW]` 可以吗  
     A：不行，如果删除，对于示例中的 ① 这种情况，会进入死循环：`target` 始终是一个响应对象，在最后通过 `target.get` 获取值的时候，又会进入 `get` 拦截，一直重复这个过程  
 
-    Q：如果将 `target = (target as any)[ReactiveFlags.RAW]` 替换为 `target = toRaw(target)` 可以吗  
-    A：不行，通过 [toRaw](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/reactive/README.md#toraw) 的递归性，得到的将是最终的 原始对象 `map`，这样在最后 `target.get` 的时候，结果只是一个只读响应对象，这是通不过 `isReactive` 测试的  
-
+    *Q2*：如果将 `target = (target as any)[ReactiveFlags.RAW]` 替换为 `target = toRaw(target)` 可以吗  
+    A：不行，通过 [toRaw](https://github.com/linhaotxl/frontend/blob/master/packages/vue/reactivity/reactive/README.md#toraw) 的递归性，`target` 得到的将是最终的原始对象 `map`，这样在最后 `target.get` 的时候，结果只是一个经过 `toReadonly` 只读响应对象，而不是 `readonly` 包裹 `reactive`  
+      
 ## set  
 定义了 `Map` 的 `set` 拦截函数  
 
@@ -265,9 +303,8 @@ function set(this: MapTypes, key: unknown, value: unknown) {
     const target = toRaw(this)
     const { has, get } = getProto(target)
 
-    // 检查是新增还是更新操作，用于之后 trigger 的类型
+    // 检查是新增还是更新操作，用于之后 trigger 的类型，会二次检查
     let hadKey = has.call( target, key )
-
     if ( !hadKey ) {
         // 将 key 转换为原始值，再次检查是否存在
         key = toRaw( key )
@@ -277,6 +314,7 @@ function set(this: MapTypes, key: unknown, value: unknown) {
     }
 
     const oldValue = get.call(target, key)
+    // 设置，key 和 value 都是原始值
     const result = target.set(key, value)
     if (!hadKey) {
         // 新增
@@ -318,6 +356,7 @@ function add(this: SetTypes, value: unknown) {
 
 ```typescript
 function has(this: CollectionTypes, key: unknown, isReadonly = false): boolean {
+    // 这一步的目的和 get 一样
     const target = (this as any)[ReactiveFlags.RAW]
     const rawTarget = toRaw(target)
     const rawKey = toRaw(key)
@@ -327,7 +366,7 @@ function has(this: CollectionTypes, key: unknown, isReadonly = false): boolean {
     !isReadonly && track(rawTarget, TrackOpTypes.HAS, rawKey)
     return key === rawKey
         ? target.has(key)
-        : target.has(key) || target.has(rawKey)
+        : target.has(key) || target.has(rawKey) // 参数是一个响应对象，优先检测响应对象，再检测原始对象
 }
 ```  
 
@@ -369,6 +408,7 @@ function deleteEntry(this: CollectionTypes, key: unknown) {
 
 ```typescript
 function size(target: IterableCollections, isReadonly = false) {
+    // 这一步的目的和 get 一样
     target = (target as any)[ReactiveFlags.RAW]
     // 触发追踪遍历的 effect
     !isReadonly && track(toRaw(target), TrackOpTypes.ITERATE, ITERATE_KEY)
@@ -378,6 +418,7 @@ function size(target: IterableCollections, isReadonly = false) {
 ```  
 
 ## clear  
+定义 `Map` 和 `Set` 的 *清空* 操作  
 
 ```typescript
 function clear(this: IterableCollections) {
@@ -437,7 +478,7 @@ function createForEach(isReadonly: boolean, isShallow: boolean) {
 一个对象要是能被 `for..of` 访问，就必须要设置 `Symbol.iterator`，首先访问 `Symbol.iterator` 获取迭代器对象，接着会调用迭代器对象中的 `next` 函数，如果返回的 `done` 为 `false` 并且 `value` 不为 `undefined`，那么就会进入一次循环体，循环体结束后，再次调用 `next` 函数获取下一次循环体的值，直至 `done` 为 `true` 结束  
 
 ### createIterableMethod  
-这个函数是处理迭代器操作的工厂函数  
+这个函数是创建迭代器操作的工厂函数  
 
 ```typescript
 function createIterableMethod(
@@ -458,12 +499,14 @@ function createIterableMethod(
         // 检测是否只是获取 key 的操作，只有在 Map.keys 属于
         const isKeyOnly = method === 'keys' && targetIsMap
 
-        // 通过原生方法获取迭代器对象
+        // 通过原生方法获取原生迭代器对象
         const innerIterator = target[method](...args)
         
         // 封装包装函数
         const wrap = isReadonly ? toReadonly : isShallow ? toShallow : toReactive
 
+        // 追踪，默认追踪遍历 ITERATE_KEY
+        // 如果访问的是 map.keys()，那么追踪的就是 MAP_KEY_ITERATE_KEY，即只追踪 key
         !isReadonly &&
         track(
             rawTarget,
@@ -492,6 +535,25 @@ function createIterableMethod(
                 return this
             }
         }
+    }
+}
+```  
+
+## createReadonlyMethod  
+这个函数用来创建 `readonly` 的修改拦截函数，`readonly` 禁止修改，所以这个函数里什么也不会做，只会抛出警告  
+
+```typescript
+function createReadonlyMethod(type: TriggerOpTypes): Function {
+    return function(this: CollectionTypes, ...args: unknown[]) {
+        // DEV 环境下抛出警告，禁止修改 readonly 响应对象
+        if (__DEV__) {
+            const key = args[0] ? `on key "${args[0]}" ` : ``
+            console.warn(
+                `${capitalize(type)} operation ${key}failed: target is readonly.`,
+                toRaw(this)
+            )
+        }
+        return type === TriggerOpTypes.DELETE ? false : this
     }
 }
 ```  

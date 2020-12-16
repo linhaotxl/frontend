@@ -134,6 +134,7 @@ function createGetter(isReadonly = false, shallow = false) {
             key === ReactiveFlags.RAW &&
             receiver === (isReadonly ? readonlyMap : reactiveMap).get(target)
         ) {
+            // ③
             return target
         }
 
@@ -189,6 +190,23 @@ function createGetter(isReadonly = false, shallow = false) {
 
 1. 在 [isReadonly](#isReadonly)、[isReactive](#isReactive) 中都会访问 `IS_READONLY`、`IS_REACTIVE` 属性，此时就会被拦截，而结果就取决于闭包参数中的 `isReadonly`，只要不是只读，就是响应式的  
 2. 在 ② 处，会自动将 `ref` 进行 “解包” 操作，参考 [示例](#ref自动解包)  
+3. 在 ③ 处判断目的就是，调用者和被拦截的是同一个对象(而不是发生在原型链上的)，此时才可以获取到原始对象，例如  
+
+    ```typescript
+    const original = {name: 'IconMan'}
+    const observal = reactive(original)
+    const obj = Object.create(observal)
+    const raw = toRaw(obj)
+    expect(raw).toBe(obj)
+    ```  
+
+    对 `obj` 进行 `toRaw` 操作  
+    - 会访问 `ReactiveFlags.RAW` 属性，由于 `obj` 自身不存在，所以会找到原型上去，导致被拦截  
+        - 此时原始对象 `target` 就是 `original`，但是调用者 `reveiver` 却是 `obj`，所以此时并不会返回原始对象 `target`，而是从 `target` 上获取 `ReactiveFlags.RAW`，结果为 `undefined`  
+    - 逻辑或 前面的值为 `undefined`，所以直接返回后面的值，也就是 `obj`  
+
+    *Q*：如果不判断 `receiver === (isReadonly ? readonlyMap : reactiveMap).get(target)` 可以吗？  
+    *A*：如果这样，那么 `toRaw(obj)` 获取到的就是 `original` 了，但 `obj` 只是一个普通对象，只不过继承了 `observal`，所以对它进行 `toRaw` 操作获取到的应该还是它自身 `obj`  
 
 ### arrayInstrumentations  
 这个对象里拦截了数组的几个函数，扩展了一些额外功能，当我们通过数组调用这些函数时，实际上调用的是拦截的函数了，而不是原始的  

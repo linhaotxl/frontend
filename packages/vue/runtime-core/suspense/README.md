@@ -2,6 +2,7 @@
 
 <!-- TOC -->
 
+- [Suspense 组件](#suspense-组件)
 - [Suspense 基本使用](#suspense-基本使用)
 - [Suspense 生成步骤](#suspense-生成步骤)
     - [vnode 的生成](#vnode-的生成)
@@ -13,6 +14,27 @@
     - [patch content 节点](#patch-content-节点)
 
 <!-- /TOC -->
+
+# Suspense 组件  
+`Suspense` 属于内置组件，它本身就是一个普通对象，里面有几个函数来完成整个组件的功能  
+
+```typescript
+export const Suspense = ((__FEATURE_SUSPENSE__
+    ? SuspenseImpl
+    : null) as any) as {
+    __isSuspense: true
+    new (): { $props: VNodeProps & SuspenseProps }
+}
+```  
+
+```typescript
+export const SuspenseImpl = {
+    __isSuspense: true,
+    process () { /* ... */ },
+    hydrate: hydrateSuspense,
+    create: createSuspenseBoundary
+}
+```  
 
 # Suspense 基本使用  
 `Suspense` 组件主要用于异步处理，例如当向服务端发送请求的过程中，需要展示 `loading`，就可以用 `Suspense` 组件  
@@ -63,7 +85,7 @@ if (__FEATURE_SUSPENSE__ && shapeFlag & ShapeFlags.SUSPENSE) {
 最终，`ssContent` 就是异步组件的 `vnode`，而 `ssFallback` 就是异步结束之前的 `vnode`   
 
 ## patch Suspense  
-接着会对 `Suspense` 进行 `patch` 操作，会由 `Suspense` 具体的 `process` 完成  
+接着会对 `Suspense` 进行 `patch` 操作，由 `Suspense` 具体的 `process` 完成  
 
 ```typescript
 process(
@@ -175,7 +197,7 @@ function mountSuspense(
 }
 ```  
 
-在 ① 处对 `content` 进行 `patch` 操作时，会传入当前 `suspense` 作为父作用域，也就是说，`content` 始终会处于 `suspense` 作用域之内，如果 `content` 是一个异步组件，那么会将 `suspense.deps` 增加，在结束 `patch` 操作后，会检测是否存在异步操作，从而进行不同的渲染  
+在 ① 处对 `content` 进行 `patch` 操作时，会传入当前 `suspense` 作为父作用域，即 `parentSuspense` 为作用域对象，如果 `content` 是一个异步组件，那么会将 `suspense.deps` 增加，在结束 `patch` 操作后，会检测是否存在异步操作，从而进行不同的渲染  
 
 ## 创建 Suspense 作用域  
 每个 `Suspense` 组件都会对应一个作用域对象  
@@ -244,7 +266,7 @@ function createSuspenseBoundary(
 当一个组件作为 `Suspense` 的 `default` 插槽时，那么在 `patch` 组件时，始终会处于这个 `suspense` 作用域内，即 `parentSuspent` 始终是指向这个作用域对象  
 
 ### 注册异步操作 registerDep   
-当一个组件的 `setup` 返回一个 `Promise` 时，此时就会调用这个函数将渲染组件的函数与所在的 `suspense` 关联起来  
+当一个组件的 `setup` 返回一个 `Promise` 时，此时先会在 [setupStatefulComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent) 中将返回的 `Promise` 挂载在 `asyncDep` 上，接着在 [mountComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent) 中调用该方法将作用域对象与组件的渲染函数关联起来  
 
 ```typescript
 registerDep(instance, setupRenderEffect) {
@@ -325,6 +347,10 @@ registerDep(instance, setupRenderEffect) {
 ```  
 
 ### 完成异步操作 resolve  
+当调用这个方法时，说明异步过程已经结束，需要将真正展示的组件显示出来了  
+调用的地方有两个：  
+1. 异步过程结束：在 [registerDep](#registerDep) 中 `then` 的回调最后，如果异步过程全部执行完，则调用 `resolve` 进行渲染  
+2. 没有异步过程：在 [mountSuspense](#mountSuspense) 最后，如果不存在异步任务，则直接调用 `resolve` 进行渲染  
 
 ```typescript
 resolve(resume = false) {
@@ -399,7 +425,6 @@ resolve(resume = false) {
     }
 }
 ```  
-
 
 ## patch content 节点  
 如果 `content` 是一个组件，且 `setup` 是一个异步操作，在 [处理 `setup` 返回值结果时](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupStatefulComponent)，会将返回的 `Promise` 挂载在组件的 `asyncDep` 上，然后又会 [处理异步组件](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent)(*这里的 `parentSuspense` 实际就是上一步生成的作用域对象*)，调用 [注册异步操作](#registerDep) 函数，将 `content` 组件的渲染函数放入异步操作的成功队列中(`then 的调`)，这样当异步任务结束后，就会执行 `content` 的渲染函数将其渲染  

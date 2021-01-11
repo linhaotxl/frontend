@@ -3,20 +3,25 @@
 <!-- TOC -->
 
 - [Suspense 组件](#suspense-组件)
-- [Suspense 基本使用](#suspense-基本使用)
+    - [基本流程](#基本流程)
+    - [Suspense 作用域](#suspense-作用域)
 - [Suspense 生成步骤](#suspense-生成步骤)
     - [vnode 的生成](#vnode-的生成)
     - [patch Suspense](#patch-suspense)
     - [挂载 Suspense](#挂载-suspense)
-    - [创建 Suspense 作用域](#创建-suspense-作用域)
-        - [注册异步操作 registerDep](#注册异步操作-registerdep)
-        - [完成异步操作 resolve](#完成异步操作-resolve)
-    - [patch content 节点](#patch-content-节点)
+        - [创建 Suspense 作用域](#创建-suspense-作用域)
+            - [移动 Suspense 组件](#移动-suspense-组件)
+            - [获取 Suspense 组件的下一个兄弟节点](#获取-suspense-组件的下一个兄弟节点)
+            - [卸载 Suspense 组件](#卸载-suspense-组件)
+            - [注册异步操作 registerDep](#注册异步操作-registerdep)
+            - [完成异步操作 resolve](#完成异步操作-resolve)
+    - [设置 Suspense 组件当前展示的 vnode](#设置-suspense-组件当前展示的-vnode)
+    - [更新 Suspense](#更新-suspense)
 
 <!-- /TOC -->
 
 # Suspense 组件  
-`Suspense` 属于内置组件，它本身就是一个普通对象，里面有几个函数来完成整个组件的功能  
+`Suspense` 属于内置组件，它本身就是一个普通对象，所以在创建 `vnode` 时就是将这个对象作为 `createVnode` 的第一个参数   
 
 ```typescript
 export const Suspense = ((__FEATURE_SUSPENSE__
@@ -36,11 +41,18 @@ export const SuspenseImpl = {
 }
 ```  
 
-# Suspense 基本使用  
-`Suspense` 组件主要用于异步处理，例如当向服务端发送请求的过程中，需要展示 `loading`，就可以用 `Suspense` 组件  
+## 基本流程  
 `Suspense` 组件接受两个插槽  
- * `default` 插槽: 可以是异步组件，或者存在 `async setup` 函数的组件，异步过程结束后会展示  
- * `fallback` 插槽: 异步过程结束前会展示  
+ * `default`: 异步组件，或者存在 `async setup` 函数的组件，异步过程结束后会展示  
+ * `fallback`: 异步过程结束前会展示  
+ 
+1. 每个 `Suspense` 组件都会有一个空的 `div` 容器，称为 `hiddenContainer`，首先会将 `default` 插入到空的容器中  
+    如果 `default` 中存在异步组件，首先会将异步组件的 `subTree` 设置注释节点，然后将注释插入到异步组件的容器中，作为占位符  
+    这个占位符表示的就是异步组件实际要渲染的位置  
+    注意：`default` 并不会执行渲染函数 `render`，而且的所有子节点都会在 `hiddenContainer` 中  
+2. 如果 `default` 中存在异步组件，则会将 `fallback` 插入到 `Suspense` 的真实容器中  
+3. 等到异步过程结束后可以获取到 `render` 函数，在渲染到占位符的位置，渲染结束后将占位符移除  
+    卸载 `fallback`，再将渲染的结束整个移动到真实节点中  
 
 ```typescript
 const Comp = defineComponent(() => new Promise(( resolve ) => {
@@ -69,10 +81,135 @@ await timeout(1000);
 expect(root.innerHTML).toBe(`<div>complete</div>`)
 ```  
 
+在第一次 `render` 时，会先创建 `hiddenContainer`，由于 `default` 插槽是异步组件，所以会创建注释并插入到 `hiddenContainer` 中  
+在将 `fallback` 插入到 `root` 中  
+
+```html
+<!-- hiddenContainer -->
+<div>
+    <!--  -->
+</div>
+
+<!-- root -->
+<div>
+    <div>fallback</div>
+</div>
+```
+
+异步结束后，会调用渲染函数将结果渲染到注释之前，再删除注释节点  
+
+```html
+<!-- hiddenContainer -->
+<div>
+    <div>complete</div>
+</div>
+
+<!-- root -->
+<div>
+    <div>fallback</div>
+</div>
+```  
+
+最后在将 `fallback` 卸载，将 `hiddenContainer` 中的内容移动到 `root` 里  
+
+```html
+<!-- hiddenContainer -->
+<div></div>
+
+<!-- root -->
+<div>
+    <div>complete</div>
+</div>
+```  
+
+## Suspense 作用域  
+每个 `Suspense` 组件都会生成一个作用域对象，当插入 `default` 插槽的组件时，会始终处于作用域内，即 [patch](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/create/README.md#patch) 的第六个参数 `parentSuspense`，但是插入 `fallback` 时，是不存在于作用域内的，后面会看到，先来看看这个作用对象里面都有哪些内容  
+
+```typescript
+export interface SuspenseBoundary {
+    /**
+     * Suspense 组件对应的 vnode 对象 
+     */
+    vnode: VNode<RendererNode, RendererElement, SuspenseProps>
+    /**
+     * 父级的作用域对象，存在 Suspense 嵌套时，里面的 Suspense 就会存在父级的作用域 
+     */
+    parent: SuspenseBoundary | null
+    /**
+     * Suspense 组件所在的父组件实例 
+     */
+    parentComponent: ComponentInternalInstance | null
+    isSVG: boolean
+    optimized: boolean
+    /**
+     * Suspense 组件所在的真实容器
+     */
+    container: RendererElement
+    /**
+     * Suspense 组件自身创建的隐藏容器 
+     */
+    hiddenContainer: RendererElement
+    /**
+     * Suspense 组件的下一个节点 
+     */
+    anchor: RendererNode | null
+    /**
+     *  Suspense 组件当前渲染的 vnode，如果在异步过程结束之前，就是 fallback，异步过程结束后就是 default
+     */
+    activeBranch: VNode | null
+    /**
+     * Suspense 组件等待渲染的 vnode，如果在异步过程结束之前，就是 default，异步过程结束之后就是 null，表示已经没有需要等待渲染的节点了 
+     */
+    pendingBranch: VNode | null
+    /**
+     * Suspense 组件内异步任务的个数 
+     */
+    deps: number
+    pendingId: number
+    timeout: number
+    isInFallback: boolean
+    isHydrating: boolean
+    isUnmounted: boolean
+    /**
+     * default 插槽内产生的副作用，因为 fallback 不处于作用域内，所以没有 fallback 产生的副作用 
+     */
+    effects: Function[]
+    /**
+     * 所有异步任务结束后调用的函数：将隐藏容器内的节点移动到真实节点
+     */
+    resolve(force?: boolean): void
+    fallback(fallbackVNode: VNode): void
+    /**
+     * Suspense 组件发生移动调用的函数 
+     */
+    move(
+        container: RendererElement,
+        anchor: RendererNode | null,
+        type: MoveType
+    ): void
+    /**
+     * 获取 Suspense 组件的下一个节点 
+     */
+    next(): RendererNode | null
+    /**
+     * 注册异步任务，当 Suspense 内存在异步组件时调用 
+     */
+    registerDep(
+        instance: ComponentInternalInstance,
+        setupRenderEffect: SetupRenderEffectFn
+    ): void
+    /**
+     * 卸载 Suspense 组件 
+     */
+    unmount(parentSuspense: SuspenseBoundary | null, doRemove?: boolean): void
+}
+```  
+
+
 # Suspense 生成步骤
 
 ## vnode 的生成  
-在调用 `App` 组件的 `render` 函数时生成的 `vnode`，会对 `default` 和 `fallback` 两个插槽进行处理，然后挂载在 `vnode` 上  
+在创建 `Suspense` 的 `vnode` 时，会对 `default` 和 `fallback` 两个插槽进行处理，然后挂载在 `vnode` 上  
 
 ```typescript
 if (__FEATURE_SUSPENSE__ && shapeFlag & ShapeFlags.SUSPENSE) {
@@ -146,9 +283,9 @@ function mountSuspense(
         o: { createElement }
     } = rendererInternals
 
-    // 创建一个空的 div，这个 div 并不会插入到实际的 DOM 树中
+    // 1. 创建隐藏容器，并不会插入到实际的 DOM 树中
     const hiddenContainer = createElement('div')
-    // 创建 Suspense 作用域
+    // 2. 创建 Suspense 作用域，并挂载在 vnode 上
     const suspense = (vnode.suspense = createSuspenseBoundary(
         vnode,
         parentSuspense,
@@ -161,16 +298,14 @@ function mountSuspense(
         rendererInternals
     ))
 
-    // ① 将 content 挂载在 pendingBranch 上，表示这是异步操作结束后需要展示的组件
-    // 将 content 挂载在隐藏容器上
-    // 如果 ssContent 是一个 async setup 组件，那么会将 subtree 设置为注释节点，并挂载到 hiddenContainer 中
+    // 3. 将 content 挂载在 pendingBranch 上，表示这是 Suspense 需要等待的组件
     patch(
         null,
         (suspense.pendingBranch = vnode.ssContent!),
-        hiddenContainer,
+        hiddenContainer,    // 容器为隐藏容器
         null,
         parentComponent,
-        suspense,   // content 会处于 suspense 作用域内
+        suspense,           // content 会处于 suspense 作用域内
         isSVG,
         opt
     )
@@ -197,10 +332,11 @@ function mountSuspense(
 }
 ```  
 
-在 ① 处对 `content` 进行 `patch` 操作时，会传入当前 `suspense` 作为父作用域，即 `parentSuspense` 为作用域对象，如果 `content` 是一个异步组件，那么会将 `suspense.deps` 增加，在结束 `patch` 操作后，会检测是否存在异步操作，从而进行不同的渲染  
+注意：在第三步对 `content` 进行 `patch` 操作时，会传入当前 `suspense` 作为父作用域，即之后的所有操作，`parentSuspense` 都是这个作用域  
+    如果 `content` 是一个异步组件，那么就会调用 [registerDep](#注册异步操作-registerDep) 来注册一个异步任务  
 
-## 创建 Suspense 作用域  
-每个 `Suspense` 组件都会对应一个作用域对象  
+### 创建 Suspense 作用域  
+每个 `Suspense` 组件都会对应一个作用域对象，里面每个属性的意义可以参考 [Suspense 作用域](#Suspense-作用域)  
 
 ```typescript
 /**
@@ -263,23 +399,96 @@ function createSuspenseBoundary(
     return suspense
 }
 ```  
-当一个组件作为 `Suspense` 的 `default` 插槽时，那么在 `patch` 组件时，始终会处于这个 `suspense` 作用域内，即 `parentSuspent` 始终是指向这个作用域对象  
 
-### 注册异步操作 registerDep   
-当一个组件的 `setup` 返回一个 `Promise` 时，此时先会在 [setupStatefulComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent) 中将返回的 `Promise` 挂载在 `asyncDep` 上，接着在 [mountComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent) 中调用该方法将作用域对象与组件的渲染函数关联起来  
+作用域里的一些函数，可以等到具体用到的时候再回来看详细内容  
+
+#### 移动 Suspense 组件  
+当移动的是一个 `Suspense` 组件时，会调用这个函数来实现  
 
 ```typescript
+move(container, anchor, type) {
+    suspense.activeBranch && move(suspense.activeBranch, container, anchor, type)
+    suspense.container = container
+},
+```  
+
+#### 获取 Suspense 组件的下一个兄弟节点  
+
+```typescript
+next() {
+    // 实际获取的是 activeBranch 的兄弟节点
+    return suspense.activeBranch && next(suspense.activeBranch)
+},
+```  
+
+#### 卸载 Suspense 组件  
+当卸载的是一个 `Suspense` 组件时，会调用这个函数  
+
+```typescript
+unmount(parentSuspense, doRemove) {
+    // 标识作用域对象中的值，标识已经卸载
+    suspense.isUnmounted = true
+    // 卸载当前展示的 vnode
+    if (suspense.activeBranch) {
+        unmount(
+            suspense.activeBranch,
+            parentComponent,
+            parentSuspense,
+            doRemove
+        )
+    }
+    // 如果在异步过程结束前就卸载了 Suspense，那么也会卸载等待的 vnode
+    if (suspense.pendingBranch) {
+        unmount(
+            suspense.pendingBranch,
+            parentComponent,
+            parentSuspense,
+            doRemove
+        )
+    }
+}
+```  
+
+#### 注册异步操作 registerDep   
+1. 当在 [挂载阶段](#挂载-Suspense) `patch` `pengingBranch` 时，如果 `setup` 返回一个 `Promise` 时，此时先会在 [setupStatefulComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent) 中将返回的 `Promise` 挂载在 `asyncDep` 上，接着在 [mountComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent) 中调用 *注册函数* 将作用域对象与组件的渲染函数关联起来  
+2. 接着在客户端情况下，会将异步组件的 `subTree` 直接设置为注释节点，并将注释插入到异步组件所处的容器中，作为占位符，表示异步组件异步结束后实际渲染的位置  
+    这里的容器可能是值前面创建的 `hiddenContainer`，也可能不是，但无论是哪一种情况，都会在 `hiddenContainer` 的里面  
+
+    ```typescript
+    // 这种情况，渲染 Comp 时的容器就是 hiddenContainer
+    h(Suspense, null, {
+        default: h(Comp),
+        fallback: h('div', 'loading')
+    })
+
+    // 这种情况，渲染 Comp 时的容器就是 div，而 div 又是在 hiddenContainer 里的
+    h(Suspense, null, {
+        default: h('div', null, [
+            h(Comp)
+        ]),
+        fallback: h('div', 'loading')
+    })
+    ```  
+
+接下来看实现  
+
+```typescript
+/**
+ * 注册异步任务
+ * @param {} instance 异步组件实例 
+ * @param {} setupRenderEffect 渲染函数 
+ */
 registerDep(instance, setupRenderEffect) {
     if (!suspense.pendingBranch) {
         return
     }
 
-    // 获取真实节点，在服务端下会存在，客户端下不存在
+    // 获取真实节点，在服务端会存在，客户端下不存在
     const hydratedEl = instance.vnode.el
     // 异步操作 +1
     suspense.deps++
     
-    // 异步任务增加 then 和 catch 回调
+    // setup 返回的异步任务增加 then 和 catch 回调
     instance
     .asyncDep!.catch(err => {
         handleError(err, instance, ErrorCodes.SETUP_FUNCTION)
@@ -297,11 +506,11 @@ registerDep(instance, setupRenderEffect) {
 
         // 异步操作 -1
         suspense.deps--
-        // retry from this component
+        // 标识异步操作已结束
         instance.asyncResolved = true
         
         const { vnode } = instance
-        // 处理 asyncSetupResult 为渲染函数
+        // 处理 asyncSetupResult 为渲染函数 render
         handleSetupResult(instance, asyncSetupResult, false)
         
         if (hydratedEl) {
@@ -311,7 +520,7 @@ registerDep(instance, setupRenderEffect) {
         }
         
         // 获取占位节点
-        // 在客户端下，在 mountComponent 中，如果组件是异步的话，那么会将注释节点作为其子节点
+        // 客户端下，在 mountComponent 中，如果组件是异步的话，那么会将注释节点作为其子节点
         // 服务端下不存在
         const placeholder = !hydratedEl && instance.subTree.el
         
@@ -319,12 +528,9 @@ registerDep(instance, setupRenderEffect) {
         setupRenderEffect(
             instance,
             vnode,
-            // component may have been moved before resolve.
-            // if this is not a hydration, instance.subTree will be the comment
-            // placeholder.
+            // 客户端情况下，容器就是占位符所在的容器
             parentNode(hydratedEl || instance.subTree.el!)!,
-            // anchor will not be used if this is hydration, so only need to
-            // consider the comment placeholder case.
+            // 客户端情况下，anchor 就是占位符的下一个节点
             hydratedEl ? null : next(instance.subTree),
             suspense,
             isSVG,
@@ -346,11 +552,8 @@ registerDep(instance, setupRenderEffect) {
 }
 ```  
 
-### 完成异步操作 resolve  
-当调用这个方法时，说明异步过程已经结束，需要将真正展示的组件显示出来了  
-调用的地方有两个：  
-1. 异步过程结束：在 [registerDep](#registerDep) 中 `then` 的回调最后，如果异步过程全部执行完，则调用 `resolve` 进行渲染  
-2. 没有异步过程：在 [mountSuspense](#mountSuspense) 最后，如果不存在异步任务，则直接调用 `resolve` 进行渲染  
+#### 完成异步操作 resolve  
+当调用这个方法时，说明 `Suspense` 异步过程已经结束，需要将真正展示的组件显示出来了  
 
 ```typescript
 resolve(resume = false) {
@@ -426,25 +629,26 @@ resolve(resume = false) {
 }
 ```  
 
-## patch content 节点  
-如果 `content` 是一个组件，且 `setup` 是一个异步操作，在 [处理 `setup` 返回值结果时](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupStatefulComponent)，会将返回的 `Promise` 挂载在组件的 `asyncDep` 上，然后又会 [处理异步组件](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent)(*这里的 `parentSuspense` 实际就是上一步生成的作用域对象*)，调用 [注册异步操作](#registerDep) 函数，将 `content` 组件的渲染函数放入异步操作的成功队列中(`then 的调`)，这样当异步任务结束后，就会执行 `content` 的渲染函数将其渲染  
+## 设置 Suspense 组件当前展示的 vnode  
+无论什么时候调用 `setActiveBranch`，它的第二个参数都是已经 `patch` 过的 `vnode`，所以肯定已经创建了真实节点(存在 `el`)  
 
 ```typescript
-// 处理 Suspense 异步组件
-if (__FEATURE_SUSPENSE__ && instance.asyncDep) {
-    // 将渲染函数注册到 parentSuspense 作用域对象中
-    parentSuspense && parentSuspense.registerDep(instance, setupRenderEffect)
-
-    // 客户端下 initialVNode.el 是不存在的
-    if (!initialVNode.el) {
-        // 认为组件的子节点仅仅是一个注释节点，并将其挂载到 container 中
-        const placeholder = (instance.subTree = createVNode(Comment))
-        processCommentNode(null, placeholder, container!, anchor)
+/**
+ * @param { SuspenseBoundary } suspense Suspense 作用域
+ * @param { VNode } branch 当前展示的 vnode
+ */
+function setActiveBranch(suspense: SuspenseBoundary, branch: VNode) {
+    // 更新作用域中当前展示的 vnode
+    suspense.activeBranch = branch
+    const { vnode, parentComponent } = suspense
+    // 更新 Suspense 的 vnode 的 el
+    const el = (vnode.el = branch.el)
+    // 如果 Suspense 所在的父组件只有一个节点且就是 Suspense 组件，那么会向上更新父组件的 vnode 的 el
+    if (parentComponent && parentComponent.subTree === vnode) {
+        parentComponent.vnode.el = el         // 修改父组件 vnode 的 el
+        updateHOCHostEl(parentComponent, el)  // 递归向上修改父组件的 el
     }
-    return
 }
 ```  
 
-**注意，这一步是发生在 [mountSuspense](#mountSuspense) 中对 `content` 进行 `patch` 的过程中，而传入的容器节点是 `hiddenContainer` 而不是真实的容器节点，所以这里将注释节点是插入插入到隐藏容器中的**  
-
-
+## 更新 Suspense

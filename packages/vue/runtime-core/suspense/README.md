@@ -3,12 +3,12 @@
 <!-- TOC -->
 
 - [Suspense 组件](#suspense-组件)
-    - [基本流程](#基本流程)
     - [Suspense 作用域](#suspense-作用域)
 - [Suspense 生成步骤](#suspense-生成步骤)
     - [vnode 的生成](#vnode-的生成)
     - [patch Suspense](#patch-suspense)
     - [挂载 Suspense](#挂载-suspense)
+        - [收集副作用](#收集副作用)
         - [创建 Suspense 作用域](#创建-suspense-作用域)
             - [移动 Suspense 组件](#移动-suspense-组件)
             - [获取 Suspense 组件的下一个兄弟节点](#获取-suspense-组件的下一个兄弟节点)
@@ -41,89 +41,16 @@ export const SuspenseImpl = {
 }
 ```  
 
-## 基本流程  
 `Suspense` 组件接受两个插槽  
- * `default`: 异步组件，或者存在 `async setup` 函数的组件，异步过程结束后会展示  
+ * `default`: 包含异步过程的组件，异步过程结束后会展示  
  * `fallback`: 异步过程结束前会展示  
- 
-1. 每个 `Suspense` 组件都会有一个空的 `div` 容器，称为 `hiddenContainer`，首先会将 `default` 插入到空的容器中  
-    如果 `default` 中存在异步组件，首先会将异步组件的 `subTree` 设置注释节点，然后将注释插入到异步组件的容器中，作为占位符  
-    这个占位符表示的就是异步组件实际要渲染的位置  
-    注意：`default` 并不会执行渲染函数 `render`，而且的所有子节点都会在 `hiddenContainer` 中  
-2. 如果 `default` 中存在异步组件，则会将 `fallback` 插入到 `Suspense` 的真实容器中  
-3. 等到异步过程结束后可以获取到 `render` 函数，在渲染到占位符的位置，渲染结束后将占位符移除  
-    卸载 `fallback`，再将渲染的结束整个移动到真实节点中  
-
-```typescript
-const Comp = defineComponent(() => new Promise(( resolve ) => {
-    setTimeout(() => {
-        resolve(() => h('div', 'complete'));
-    }, 1000);
-}));
-
-const App = defineComponent(() => {
-    return () => h(
-        Suspense,
-        null,
-        {
-            default: h(Comp),
-            fallback: h('div', 'loading')
-        }
-    )
-});
-
-const root = nodeOps.createElement('div')
-render(h(App), root);
-
-expect(root.innerHTML).toBe(`<div>loading</div>`)
-
-await timeout(1000);
-expect(root.innerHTML).toBe(`<div>complete</div>`)
-```  
-
-在第一次 `render` 时，会先创建 `hiddenContainer`，由于 `default` 插槽是异步组件，所以会创建注释并插入到 `hiddenContainer` 中  
-在将 `fallback` 插入到 `root` 中  
-
-```html
-<!-- hiddenContainer -->
-<div>
-    <!--  -->
-</div>
-
-<!-- root -->
-<div>
-    <div>fallback</div>
-</div>
-```
-
-异步结束后，会调用渲染函数将结果渲染到注释之前，再删除注释节点  
-
-```html
-<!-- hiddenContainer -->
-<div>
-    <div>complete</div>
-</div>
-
-<!-- root -->
-<div>
-    <div>fallback</div>
-</div>
-```  
-
-最后在将 `fallback` 卸载，将 `hiddenContainer` 中的内容移动到 `root` 里  
-
-```html
-<!-- hiddenContainer -->
-<div></div>
-
-<!-- root -->
-<div>
-    <div>complete</div>
-</div>
-```  
 
 ## Suspense 作用域  
-每个 `Suspense` 组件都会生成一个作用域对象，当插入 `default` 插槽的组件时，会始终处于作用域内，即 [patch](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/create/README.md#patch) 的第六个参数 `parentSuspense`，但是插入 `fallback` 时，是不存在于作用域内的，后面会看到，先来看看这个作用对象里面都有哪些内容  
+每个 `Suspense` 组件都会生成一个作用域对象  
+ * 当对 `default` 插槽的组件进行 `patch` 操作时，会始终处于 *suspense* 作用域内，即 [patch](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/create/README.md#patch) 的第六个参数 `parentSuspense`  
+ * 当对 `fallabck` 插槽的组件进行 `patch` 操作时，是不处于 *suspense* 作用内的，后面会看到  
+
+先来看 *suspense* 作用域的结构  
 
 ```typescript
 export interface SuspenseBoundary {
@@ -132,7 +59,7 @@ export interface SuspenseBoundary {
      */
     vnode: VNode<RendererNode, RendererElement, SuspenseProps>
     /**
-     * 父级的作用域对象，存在 Suspense 嵌套时，里面的 Suspense 就会存在父级的作用域 
+     * 父级 suspense 作用域，存在 Suspense 嵌套时，里面的 Suspense 就会存在父级作用域 
      */
     parent: SuspenseBoundary | null
     /**
@@ -146,7 +73,7 @@ export interface SuspenseBoundary {
      */
     container: RendererElement
     /**
-     * Suspense 组件自身创建的隐藏容器 
+     * Suspense 组件自身创建的隐藏容器，后面会看到这个隐藏容器的作用 
      */
     hiddenContainer: RendererElement
     /**
@@ -154,7 +81,7 @@ export interface SuspenseBoundary {
      */
     anchor: RendererNode | null
     /**
-     *  Suspense 组件当前渲染的 vnode，如果在异步过程结束之前，就是 fallback，异步过程结束后就是 default
+     *  Suspense 组件当前展示的 vnode，如果在异步过程结束之前，就是 fallback，异步过程结束后就是 default
      */
     activeBranch: VNode | null
     /**
@@ -171,7 +98,7 @@ export interface SuspenseBoundary {
     isHydrating: boolean
     isUnmounted: boolean
     /**
-     * default 插槽内产生的副作用，因为 fallback 不处于作用域内，所以没有 fallback 产生的副作用 
+     * default 组件内产生的副作用，因为 fallback 不处于作用域内，所以没有 fallback 产生的副作用 
      */
     effects: Function[]
     /**
@@ -204,7 +131,6 @@ export interface SuspenseBoundary {
     unmount(parentSuspense: SuspenseBoundary | null, doRemove?: boolean): void
 }
 ```  
-
 
 # Suspense 生成步骤
 
@@ -266,10 +192,86 @@ process(
 ```  
 
 ## 挂载 Suspense  
+挂载流程：  
+1. 每个 `Suspense` 组件都会有一个空的 `div` 容器，称为 `hiddenContainer`，首先会将 `default` `patch` 到空的容器中  
+    如果 `default` 中存在异步组件，首先会将异步组件的 `subTree` 设置注释节点，然后将注释插入到异步组件所在的容器中，作为占位符  
+    这个占位符表示的就是异步组件实际要渲染的位置  
+    注意：如果存在异步组件，是不会执行渲染函数 `render` 的  
+2. 如果 `default` 中存在异步组件，则会将 `fallback` 插入到 `Suspense` 组件所在的真实容器中  
+3. 等到异步过程结束后可以获取到渲染函数，调用渲染函数插入到占位符的位置，渲染结束后将占位符移除  
+    卸载 `fallback`，再将 `hiddenContainer` 中的所有内容移动到 `fallback` 的位置 
+
+```typescript
+const Comp = defineComponent(() => new Promise(( resolve ) => {
+    setTimeout(() => {
+        resolve(() => h('div', 'complete'));
+    }, 1000);
+}));
+
+const App = defineComponent(() => {
+    return () => h(
+        Suspense,
+        null,
+        {
+            default: h(Comp),
+            fallback: h('div', 'loading')
+        }
+    )
+});
+
+const root = nodeOps.createElement('div')
+render(h(App), root);
+
+expect(root.innerHTML).toBe(`<div>loading</div>`)
+
+await timeout(1000);
+expect(root.innerHTML).toBe(`<div>complete</div>`)
+```  
+
+初始化  
+```html
+<!-- hiddenContainer -->
+<div>
+    <!--  -->
+</div>
+
+<!-- root -->
+<div>
+    <div>fallback</div>
+</div>
+```
+
+异步结束后，会调用渲染函数将结果渲染到注释之前，再删除注释节点  
+
+```html
+<!-- hiddenContainer -->
+<div>
+    <div>complete</div>
+</div>
+
+<!-- root -->
+<div>
+    <div>fallback</div>
+</div>
+```  
+
+最后在将 `fallback` 卸载，将 `hiddenContainer` 中的内容移动到 `root` 里  
+
+```html
+<!-- hiddenContainer -->
+<div></div>
+
+<!-- root -->
+<div>
+    <div>complete</div>
+</div>
+```  
+
+接下来看挂载的具体实现  
 
 ```typescript
 function mountSuspense(
-    vnode: VNode,                                       // Suspense vnode
+    vnode: VNode,
     container: RendererElement,
     anchor: RendererNode | null,
     parentComponent: ComponentInternalInstance | null,
@@ -285,7 +287,7 @@ function mountSuspense(
 
     // 1. 创建隐藏容器，并不会插入到实际的 DOM 树中
     const hiddenContainer = createElement('div')
-    // 2. 创建 Suspense 作用域，并挂载在 vnode 上
+    // 2. 创建 suspense 作用域，并挂载在 vnode 上
     const suspense = (vnode.suspense = createSuspenseBoundary(
         vnode,
         parentSuspense,
@@ -307,7 +309,7 @@ function mountSuspense(
         parentComponent,
         suspense,           // content 会处于 suspense 作用域内
         isSVG,
-        opt
+        optimized
     )
     
     // 检测是否存在异步操作
@@ -334,6 +336,25 @@ function mountSuspense(
 
 注意：在第三步对 `content` 进行 `patch` 操作时，会传入当前 `suspense` 作为父作用域，即之后的所有操作，`parentSuspense` 都是这个作用域  
     如果 `content` 是一个异步组件，那么就会调用 [registerDep](#注册异步操作-registerDep) 来注册一个异步任务  
+
+### 收集副作用  
+在挂载的第 3 步对 `default` 进行 `patch` 时，传递了 `suspense` 作用域，可以看到，无论 `default` 的层级有多深，`parentSuspense` 都是这个作用域  
+如果组件存在一些副作用(例如生命周期，或者通过 [watch](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/watch/README.md) 监听了值)，那么此时并不会立即入队，而是先会 `push` 到作用域的 `effects` 中，等到异步真正结束的时候再去执行这些副作用   
+
+```typescript
+export function queueEffectWithSuspense(fn: Function | Function[], suspense: SuspenseBoundary | null): void {
+    // 存在 suspense 作用域，并且异步任务还没有结束，将 fn 存入作用域内
+    if (suspense && suspense.pendingBranch) {
+        if (isArray(fn)) {
+            suspense.effects.push(...fn)
+        } else {
+            suspense.effects.push(fn)
+        }
+    } else {
+        queuePostFlushCb(fn)
+    }
+}
+```  
 
 ### 创建 Suspense 作用域  
 每个 `Suspense` 组件都会对应一个作用域对象，里面每个属性的意义可以参考 [Suspense 作用域](#Suspense-作用域)  
@@ -651,4 +672,94 @@ function setActiveBranch(suspense: SuspenseBoundary, branch: VNode) {
 }
 ```  
 
-## 更新 Suspense
+## 更新 Suspense  
+
+```typescript
+function patchSuspense(
+  n1: VNode,
+  n2: VNode,
+  container: RendererElement,
+  anchor: RendererNode | null,
+  parentComponent: ComponentInternalInstance | null,
+  isSVG: boolean,
+  optimized: boolean,
+  { p: patch, um: unmount, o: { createElement } }: RendererInternals
+) {
+    // 复用 suspense 作用域
+    const suspense = (n2.suspense = n1.suspense)!
+    // 更新作用域的 vnode 指向新的 vnode
+    suspense.vnode = n2
+    // 复用真实节点 el
+    n2.el = n1.el
+
+    const newBranch = n2.ssContent!
+    const newFallback = n2.ssFallback!
+
+    const { activeBranch, pendingBranch, isInFallback, isHydrating } = suspense
+
+    // 检测异步过程是否结束，结束后是不会存在 pendingBranch 的
+    if (pendingBranch) {
+        // 异步过程未结束
+
+        // 更新作用域中等待的节点为最新需要等待的节点
+        suspense.pendingBranch = newBranch
+
+        // 检测新老根节点是否相同
+        if (isSameVNodeType(newBranch, pendingBranch)) {
+            // 根节点相同，只需要 patch 内容即可
+            patch(
+                pendingBranch,
+                newBranch,
+                suspense.hiddenContainer,
+                null,
+                parentComponent,
+                suspense,
+                isSVG,
+                optimized
+            )
+
+            // 检测新节点是否存在异步任务
+            if (suspense.deps <= 0) {
+                // 不存在异步任务，直接 resolve
+                suspense.resolve()
+            } else if (isInFallback) {
+                // 存在异步任务，patch fallback 到真实的 container 中
+                patch(
+                    activeBranch,
+                    newFallback,
+                    container,
+                    anchor,
+                    parentComponent,
+                    null, // fallback 树中不存在 suspense 作用域
+                    isSVG,
+                    optimized
+                )
+                // 更新 suspense 当前展示的节点
+                setActiveBranch(suspense, newFallback)
+            }
+        } else {
+            // 根节点不同
+            if (isHydrating) {
+                // if toggled before hydration is finished, the current DOM tree is
+                // no longer valid. set it as the active branch so it will be unmounted
+                // when resolved
+                suspense.isHydrating = false
+                suspense.activeBranch = pendingBranch
+            } else {
+                // 卸载老节点，卸载过程中如果产生副作用会添加到 suspense.effects 中
+                unmount(pendingBranch, parentComponent, suspense)
+
+                // 重置异步任务个数
+                suspense.deps = 0
+                // 清空所有副作用，此时老节点没有挂载，所以不需要执行任何副作用
+                suspense.effects.length = 0
+                // 重置隐藏容器
+                suspense.hiddenContainer = createElement('div')
+            }
+        }
+        
+    } else {
+        
+    }
+}
+```  

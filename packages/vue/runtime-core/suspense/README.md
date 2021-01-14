@@ -739,6 +739,8 @@ function patchSuspense(
             }
         } else {
             // 根节点不同
+            suspense.pendingId++
+            
             if (isHydrating) {
                 // if toggled before hydration is finished, the current DOM tree is
                 // no longer valid. set it as the active branch so it will be unmounted
@@ -755,11 +757,104 @@ function patchSuspense(
                 suspense.effects.length = 0
                 // 重置隐藏容器
                 suspense.hiddenContainer = createElement('div')
+
+                if (isInFallback) {
+                    // 将新的异步组件 patch 到 hiddenContainer 中
+                    patch(
+                        null,
+                        newBranch,
+                        suspense.hiddenContainer,
+                        null,
+                        parentComponent,
+                        suspense,
+                        isSVG,
+                        optimized
+                    )
+
+                    // 检测新的组件中是否存在异步任务
+                    if (suspense.deps <= 0) {
+                        // 不存在异步任务 - 直接 resolve
+                        suspense.resolve()
+                    } else {
+                        // 存在异步任务，将新的 fallback 挂载到 container 中
+                        patch(
+                            activeBranch,
+                            newFallback,
+                            container,
+                            anchor,
+                            parentComponent,
+                            null, // fallback tree will not have suspense context
+                            isSVG,
+                            optimized
+                        )
+                        // 更新 Suspense 组件当前展示的 vnode
+                        setActiveBranch(suspense, newFallback)
+                    }
+                } else {
+                }
             }
         }
         
     } else {
-        
+        // 异步过程结束
+        // 检测当前展示的 vnode 和新的 vnode 是否是同一类型
+        if (activeBranch && isSameVNodeType(newBranch, activeBranch)) {
+            // 已经展示的 vnode 和新 vnode 是同一类型，直接 patch 新老节点
+            patch(
+                activeBranch,
+                newBranch,
+                container,
+                anchor,
+                parentComponent,
+                suspense,
+                isSVG,
+                optimized
+            )
+            // 更新当前展示的 vnode
+            setActiveBranch(suspense, newBranch)
+        } else {
+            // 已经展示的 vnode 不是新的 vnode
+            const onPending = n2.props && n2.props.onPending
+            if (isFunction(onPending)) {
+                onPending()
+            }
+
+            // 更新 suspense 等待的节点为新的节点
+            suspense.pendingBranch = newBranch
+            suspense.pendingId++
+            
+            // 需要重新 patch 新节点到 hiddenContainer 中
+            patch(
+                null,
+                newBranch,
+                suspense.hiddenContainer,
+                null,
+                parentComponent,
+                suspense,
+                isSVG,
+                optimized
+            )
+
+            // 检测是否存在异步任务
+            if (suspense.deps <= 0) {
+                // 直接 resolve 
+                suspense.resolve()
+            } else {
+                const { timeout, pendingId } = suspense
+                // 检测是否延时
+                if (timeout > 0) {
+                    // 如果延时时间大于 0，设置定时器，
+                    setTimeout(() => {
+                        if (suspense.pendingId === pendingId) {
+                            suspense.fallback(newFallback)
+                        }
+                    }, timeout)
+                } else if (timeout === 0) {
+                    // 如果延时时间等于 0，则同步调用 fallback
+                    suspense.fallback(newFallback)
+                }
+            }
+        }
     }
 }
 ```  

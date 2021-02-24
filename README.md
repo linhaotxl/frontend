@@ -54,7 +54,8 @@
 
 5. 内置组件  
     1. [异步组件](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/definedAsyncComponent/README.md)  
-    2. [Suspense 组件](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/suspense/README.md)
+    2. [Suspense 组件](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/suspense/README.md)  
+    3. [Teleport 组件](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/teleport/README.md)  
 
 6. 其他  
     1. [watch Api](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/watch/README.md)  

@@ -471,9 +471,45 @@ unmount(parentSuspense, doRemove) {
 ```  
 
 #### 注册异步操作 registerDep   
-1. 当在 [挂载阶段](#挂载-Suspense) `patch` `pengingBranch` 时，如果 `setup` 返回一个 `Promise` 时，此时先会在 [setupStatefulComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent) 中将返回的 `Promise` 挂载在 `asyncDep` 上，接着在 [mountComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent) 中调用 *注册函数* 将作用域对象与组件的渲染函数关联起来  
-2. 接着在客户端情况下，会将异步组件的 `subTree` 直接设置为注释节点，并将注释插入到异步组件所处的容器中，作为占位符，表示异步组件异步结束后实际渲染的位置  
-    这里的容器可能是值前面创建的 `hiddenContainer`，也可能不是，但无论是哪一种情况，都会在 `hiddenContainer` 的里面  
+当在 [挂载阶段](#挂载-Suspense) `patch` `pengingBranch` 时，如果 `setup` 返回一个 `Promise` 时，此时先会在 [setupStatefulComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#setupstatefulcomponent) 中将返回的 `Promise` 挂载在 `asyncDep` 上  
+
+```typescript
+const setupResult = callWithErrorHandling(
+    setup,
+    instance,
+    ErrorCodes.SETUP_FUNCTION,
+    [__DEV__ ? shallowReadonly(instance.props) : instance.props, setupContext]
+)
+
+if (isPromise(setupResult)) {
+    if (isSSR) {
+        // 服务端
+        return setupResult.then((resolvedResult: unknown) => {
+            handleSetupResult(instance, resolvedResult, isSSR)
+        })
+    } else if (__FEATURE_SUSPENSE__) {
+        // 客户端
+        instance.asyncDep = setupResult
+    }
+}
+```  
+
+接着在 [mountComponent](https://github.com/linhaotxl/frontend/blob/master/packages/vue/runtime-core/renderer/component/initial/README.md#mountComponent) 中调用该函数，注册一个异步任务  
+
+```typescript
+if (__FEATURE_SUSPENSE__ && instance.asyncDep) {
+    // 将当前异步组件的渲染函数注册到异步任务结束后再执行
+    parentSuspense && parentSuspense.registerDep(instance, setupRenderEffect)
+
+    // 客户端渲染下，会设置一个占位节点，表示异步任务结束后实际渲染的位置
+    if (!initialVNode.el) {
+        // 设置异步组件的 subTree 为注释，并插入到 hiddenContainer 中
+        const placeholder = (instance.subTree = createVNode(Comment))
+        processCommentNode(null, placeholder, container!, anchor)
+    }
+    return
+}
+```  
 
     ```typescript
     // 这种情况，渲染 Comp 时的容器就是 hiddenContainer

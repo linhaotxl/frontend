@@ -12,6 +12,8 @@
         - [enter](#enter)
         - [leave](#leave)
     - [更新 vnode 的 transition](#更新-vnode-的-transition)
+- [特殊情况](#特殊情况)
+    - [离场结束前又入场](#离场结束前又入场)
 
 <!-- /TOC -->
 
@@ -154,7 +156,8 @@ setup (props: BaseTransitionProps, { slots }: SetupContext) {
         const oldChild = instance.subTree
         const oldInnerChild = oldChild && getKeepAliveChild(oldChild)
 
-        // 10. 
+        // 10. 处理旧节点离场的情况
+        //     当旧节点和新节点不是同一个节点时，才需要处理
         if (
             oldInnerChild &&
             oldInnerChild.type !== Comment &&
@@ -181,9 +184,9 @@ setup (props: BaseTransitionProps, { slots }: SetupContext) {
 }
 ```
 
-可以看到，`setup` 最重要的就是为子节点设置了 `hooks` 对象，所以接下来会终点看这部分的内容  
+可以看到，`setup` 最重要的步骤就是为子节点 `child` 设置了 `hooks` 对象，所以 `hooks` 对象是接下来的重点  
 
-接下来依次介绍 `setup` 中出现的内容  
+接下来依次介绍 `setup` 中出现的函数用法  
 
 ## BaseTransition 状态  
 每个 `BaseTransition` 组件都对应一个状态，用来标识当前处于什么时期  
@@ -204,11 +207,11 @@ export function useTransitionState(): TransitionState {
         isUnmounting: false,
         leavingVNodes: new Map()
     }
-    // 挂载完成后更新状态为已挂载
+    // BaseTransition 组件挂载完成后更新
     onMounted(() => {
         state.isMounted = true
     })
-    // TODO: 卸载前更新状态为卸载中
+    // TODO: BaseTransition 组件卸载前更新
     onBeforeUnmount(() => {
         state.isUnmounting = true
     })
@@ -241,9 +244,7 @@ function getLeavingNodesForType(
 先来看看 `hooks` 对象都有哪些属性  
 
 ```typescript
-export interface TransitionHooks<
-    extends RendererElement = RendererElement
-> {
+export interface TransitionHooks<extends RendererElement = RendererElement> {
     mode: BaseTransitionProps['mode']
     persisted: boolean
     // 挂载前的钩子
@@ -271,7 +272,7 @@ export interface TransitionHooks<
 ```typescript
 export function resolveTransitionHooks(
     vnode: VNode,                         // 操作的 vnode 节点
-    props: BaseTransitionProps<any>,      // props 的原始对象
+    props: BaseTransitionProps<any>,      // BaseTransition 原始的 props 对象
     state: TransitionState,               // Transition 状态对象
     instance: ComponentInternalInstance   // Transition 组件实例
 ): TransitionHooks {
@@ -297,7 +298,7 @@ export function resolveTransitionHooks(
     const key = String(vnode.key)
     // 3. 根据 vnode.type 获取需要移除的集合
     const leavingVNodesCache = getLeavingNodesForType(state, vnode)
-    // 4. 调用钩子的函数
+    // 4. 定义调用钩子的函数
     const callHook: TransitionHookCaller = (hook, args) => {
         hook &&
         callWithAsyncErrorHandling(
@@ -319,7 +320,9 @@ export function resolveTransitionHooks(
 
     return hooks;
 }
-```
+```  
+
+接下来看每个钩子具体的调用时期以及实现方式  
 
 ### beforeEnter  
 这个钩子被调用是发生在**创建节点后，插入到容器之前**，在 [mountElement]() 中，以下是部分关键代码  
@@ -328,21 +331,22 @@ export function resolveTransitionHooks(
 const mountElement = () => {
     /* ... */
     // 检测是否需要调用 transition 的 hooks
+    // TODO: 判断方式
     const needCallTransitionHooks =
       (!parentSuspense || (parentSuspense && !parentSuspense.pendingBranch)) &&
       transition &&
       !transition.persisted
     if (needCallTransitionHooks) {
         // 调用 beforeEnter 钩子，并将真实节点 el 作为参数
-        // 注意，此时的 el 还没有被插入到容器中
         transition!.beforeEnter(el)
     }
     hostInsert(el, container, anchor)
     
     /* ... */
 }
-```
+```  
 
+**需要注意的是，此时的 `el` 还没有插入到真实容器中**  
 接下来看 `beforeEnter` 的实现  
 
 ```typescript
@@ -403,6 +407,7 @@ const mountElement = () => {
     ) {
         queuePostRenderEffect(() => {
             vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, vnode)
+            // 调用 enter 钩子，并将 el 作为参数
             needCallTransitionHooks && transition!.enter(el)
             dirs && invokeDirectiveHook(vnode, null, parentComponent, 'mounted')
         }, parentSuspense)
@@ -411,7 +416,9 @@ const mountElement = () => {
 }
 ```
 
-**和 `beforeEnter` 不同的是，`enter` 是在异步中执行的**  
+**注意：**  
+1. 和 [beforeEnter](#beforeEnter) 不同的是，[enter](#enter) 是在异步中执行的  
+2. 此时的 `el` 已经存在于容器中了  
 
 接下来看具体实现  
 
@@ -419,7 +426,7 @@ const mountElement = () => {
 // el 此时已经存在于容器内
 enter (el) {
     // 1. 获取各个需要执行的钩子
-    let hook = onEnter                // 入场钩子，默认为 onEnter
+    let hook = onEnter                // 入场后的钩子，默认为 onEnter
     let afterHook = onAfterEnter      // 入场结束钩子，默认为 onAfterEnter
     let cancelHook = onEnterCancelled // 入场取消钩子，默认为 onEnterCancelled
 
@@ -451,7 +458,7 @@ enter (el) {
             // 调用结束的钩子
             callHook(afterHook, [el])
         }
-        // 4.3 TODO:
+        // 4.3 TODO: 这种情况先不考虑，后面会说到
         if (hooks.delayedLeave) {
             hooks.delayedLeave()
         }
@@ -473,15 +480,22 @@ enter (el) {
         done()
     }
 }
-```
+```  
 
+第 4 步定义的 `done` 函数，它是用来在 `onEnter` 钩子之后做一些事，它被调用的情况有三种  
+1. 自动被调用，发生在第 5 步中  
+2. 手动调用，发生在 `onEnter` 钩子中，通过第二个参数  
+3. 这是一种特殊情况，需要先弄清 [leave](#leave) 钩子的内容，之后可以参考 [离场结束前又入场](#离场结束前又入场)  
+
+`done` 函数还有一个参数 `cancelled`，表示这是正常执行还是被取消执行，只有上面的第三种情况才属于被取消，剩下都属于正常情况  
+      
 ### leave  
 这个钩子被调用是发生在 **卸载节点** 时，在 [remove]() 方法中，部分关键代码如下  
 
 ```typescript
 const remove: RemoveFn = vnode => {
     /* ... */
-    // 执行移除真实节点的函数
+    // 1. 定义移除真实节点的函数
     const performRemove = () => {
         hostRemove(el!)
         if (transition && !transition.persisted && transition.afterLeave) {
@@ -489,17 +503,21 @@ const remove: RemoveFn = vnode => {
         }
     }
     
+    // 2. 检测是否需要调用 transition 的 hooks
     if (
         vnode.shapeFlag & ShapeFlags.ELEMENT &&
         transition &&
         !transition.persisted
     ) {
         const { leave, delayLeave } = transition
-        // 执行 leave 钩子的函数，
+        // 2.1 定义执行 leave 钩子的函数
         const performLeave = () => leave(el!, performRemove)
+        // 2.2 检测是否需要延迟离场，延迟离场只会发生在 in-out 的情况
         if (delayLeave) {
+            // 2.2.1 需要延迟离场，调用延迟离场的函数
             delayLeave(vnode.el!, performRemove, performLeave)
         } else {
+            // 2.2.2 不需要延迟离场，直接执行 leave 钩子
             performLeave()
         }
     } else {
@@ -507,8 +525,8 @@ const remove: RemoveFn = vnode => {
     }
 }
 ```
-
-注意的是，如果需要调用 `transition hooks` 时，是不会在这里删除真实节点的，而是将删除方法作为参数传递给 `leave` 钩子  
+**注意：如果需要调用 `leave` 钩子时，是不会在这里删除真实节点的，而是将删除函数 `performRemove` 作为 `leave` 钩子的参数，由钩子决定什么时候删除**  
+  
 接下来看具体实现  
 
 ```typescript
@@ -552,10 +570,10 @@ leave(el, remove) {
         }
     })
 
-    // 6. 记录当前要删除的节点
+    // 7. 记录当前要删除的节点
     leavingVNodesCache[key] = vnode
 
-    // 7. 是否存在 onLeave 钩子
+    // 8. 是否存在 onLeave 钩子
     if (onLeave) {
         // 调用 onLeave 钩子，参数和 enter 钩子一样
         onLeave(el, done)
@@ -569,7 +587,15 @@ leave(el, remove) {
 }
 ```
 
+这里的 `done` 函数也是在 `onLeave` 钩子调用后做一些事，它被调用的情况有三种  
+1. 自动被调用，发生在第 7 步中  
+2. 手动调用，发生在 `onLeave` 钩子中，通过第二个参数  
+3. TODO: 这是一种特殊情况  
 
+参数和 [enter](#enter) 中的参数一致  
+还要注意一点，`leave` 的第二个参数实际是删除真实节点的函数，它会被调用在两个地方  
+1. `done` 函数内部，也就是说，只有调用了 `done` 才会真正移除真实节点  
+2. TODO:   
 
 ## 更新 vnode 的 transition  
 通过上一步创建好的 `transition hooks` 对象，需要通过这个函数设置给 `vnode`  
@@ -610,3 +636,26 @@ export function renderComponentRoot(instance: ComponentInternalInstance): VNode 
 }
 ```
 
+# 特殊情况  
+在上面的 `hooks` 中出现了一些额外的处理操作，现在一一说明这些操作的意义  
+## 离场结束前又入场  
+这种情况是解决 [leave](#leave) 钩子中的第 2 步  
+有以下场景：  
+
+
+```typescript
+const root = document.createElement('div');
+const toggle = ref(true);
+const baseTransitionProps = {
+    beforeEnter (el) {},
+    onEnter (el, done) {},
+    leave (el, remove) {},
+};
+
+render(
+    h(BaseTransition, baseTransitionProps, () => toggle.value ? h('div') : h('span')),
+    root,
+);
+
+
+```

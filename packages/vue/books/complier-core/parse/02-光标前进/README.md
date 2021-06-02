@@ -2,16 +2,15 @@
 
 - [光标](#光标)
     - [移动光标](#移动光标)
+    - [移动光标(返回新的光标)](#移动光标返回新的光标)
     - [获取光标](#获取光标)
-- [获取节点定位](#获取节点定位)
+- [获取定位](#获取定位)
 
 <!-- /TOC -->
 
 ## 光标  
-在上一节说过，作用域和位置中会包含 `line`、`column` 以及 `offset` 这三个属性  
-在接下来的内容中会把这三个属性形象的理解为 “光标”  
-
-“光标” 会指向 *当前需要解析的内容*，例如有以下代码  
+在上一节说过，作用域 `context` 中包含 `line`、`column` 以及 `offset` 这三个属性，在接下来的内容中会把这三个属性形象的理解为 “光标”  
+“光标” 会指向 **当前需要解析的内容**，例如有以下代码  
 
 ```html
 <span>hello</span>
@@ -27,7 +26,7 @@
 接下来就看光标是如何发生移动的  
 
 ### 移动光标  
-工具函数 `advancePositionWithMutation` 来移动光标，它会将光标移动指定长度  
+通过工具函数 `advancePositionWithMutation` 来移动光标，它会将光标移动指定长度  
 
 ```ts
 export function advancePositionWithMutation(
@@ -57,14 +56,14 @@ export function advancePositionWithMutation(
     // 如果新增了行数，则列数为最后一行的列数，即总个数 - 最后一个换行符的索引
     pos.column =
         lastNewLinePos === -1
-        		? pos.column + numberOfCharacters
-        		: numberOfCharacters - lastNewLinePos
+            ? pos.column + numberOfCharacters
+            : numberOfCharacters - lastNewLinePos
 
     return pos
 }
 ```
 
-上面比较难理解的就是列数，接下来举例说明  
+通过下面的示例再详细解析下具体的过程(不要忘记换行符和制表符，其中制表符占4个字符，换行符占1个字符)  
 
 ```ts
 const code = `
@@ -78,12 +77,11 @@ const code = `
 advancePositionWithMutation({ line: 1, column: 1, offset: 0 }, code)
 ```
 
-我们期望解析后的改变位置是 `{ line: 3, column: 7, offset: 22 }`，接下来看过程  
+遍历结束后，存在两个换行符，所以新增了两行(`linesCount` 为 2，`lastNewLinePos` 为 `15`) 
+最终的列数就是 22 - 15 = 7，得出最后一行的列数，所以最终光标的内容为 `{ line: 3, column: 7, offset: 22 }`   
 
-遍历结束后，总共新增了两行，所以 `linesCount` 为 2，而且 `lastNewLinePos` 为 `15`  
-那么列数就是 22 - 15 = 7，符合我们的期待  
-
-移动改变还有一个扩展函数 `advancePositionWithClone`，它可以在不修改原始位置的情况下移动光标，返回移动后的新光标  
+### 移动光标(返回新的光标)  
+通过扩展函数 `advancePositionWithClone`，它可以在不修改原始位置的情况下移动光标，返回移动后的新光标  
 
 ```ts
 // extend 就是 Object.assign
@@ -98,7 +96,7 @@ export function advancePositionWithClone(
         numberOfCharacters
     )
 }
-```
+```  
 
 ### 获取光标  
 会从中作用域中获取位置的三个属性，组成光标数据  
@@ -110,7 +108,8 @@ function getCursor(context: ParserContext): Position {
 }
 ```
 
-## 获取节点定位  
+## 获取定位  
+在上一节中介绍过定位信息 `SourceLocation`，接下来看如何生成定位信息  
 
 ```ts
 function getSelection(
@@ -127,5 +126,4 @@ function getSelection(
 }
 ```
 
-上一节说过，为什么定位需要采用 “左闭右开”，就是为了获取 `source`，表示这一段 `source` 的定位  
-
+上一节说过，为什么定位需要采用 “左闭右开”，就是为了获取 `source`  

@@ -2,6 +2,7 @@
 
 - [解析所有属性](#解析所有属性)
 - [解析单个属性](#解析单个属性)
+    - [解析指令](#解析指令)
 - [解析属性值](#解析属性值)
 - [举例](#举例)
     - [静态属性节点](#静态属性节点)
@@ -14,7 +15,7 @@
 
 ## 解析所有属性  
 这个函数并没有做具体的解析过程，只是把所有解析好的节点存下来，并检测是否解析完成而已  
-注意的是，在开始解析属性前，`context.code` 就已经是以 “属性” 开头的了  
+注意的是，在开始解析属性前，`context.source` 就已经是以 “属性” 开头的了  
 
 ```ts
 function parseAttributes(
@@ -88,7 +89,7 @@ function parseAttributes(
     }
     ```  
 
-接下来具体实现，注意，解析每个属性时，当前模板内容都是从属性名开头的  
+接下来看具体实现，注意，解析每个属性时，当前模板内容都是从属性名开头的  
 
 ```ts
 function parseAttribute(
@@ -152,107 +153,10 @@ function parseAttribute(
     // 11. 记录此时的位置与解析前的位置，也就是整个属性的定位
     const loc = getSelection(context, start)
 
-    // 12. 如果当前不处于 v-pre 内，且属性名以 v-、:、@、# 开头，那么会被认为是指令，接下来解析指令
-    if (!context.inVPre && /^(v-|:|@|#)/.test(name)) {
-        // 12.1 匹配指令的各个值，各个分组意义如下，以 v-on:click.enter.extra 来说
-        //      1: 指令名，即 on
-        //      2: 参数名，即 click
-        //      3: 修饰符，即 .enter.extra
-        const match = /(?:^v-([a-z0-9-]+))?(?:(?::|^@|^#)(\[[^\]]+\]|[^\.]+))?(.+)?$/i.exec( name )!
-        // 12.2 获取指令名，如果没有解析出指令名，则根据快捷符来解析
-        const dirName =
-            match[1] ||
-            (startsWith(name, ':') ? 'bind' : startsWith(name, '@') ? 'on' : 'slot')
-        
-        // 12.3 参数表达式节点
-        let arg: ExpressionNode | undefined
-        // 12.4 如果参数存在则解析参数
-        if (match[2]) {
-            // 12.4.1 是否是 v-slot 指令
-            const isSlot = dirName === 'slot'
-            // 12.4.2 获取参数在指令名中的偏移
-            const startOffset = name.indexOf(match[2])
-            // 12.4.3 TODO: 获取参数的定位，包括动态参数左右两边的 []
-            const loc = getSelection(
-                context,
-                // 获取参数的起始位置：基于 start 向前进 startOffset 长度
-                getNewPosition(context, start, startOffset),
-                // 获取参数的结束位置：基于 start 向前 startOffset + 参数长度
-                // 如果是 v-slot 指令，则还需要再前进 修饰符 的长度，是因为 v-slot 指令的参数需要包含修饰符
-                getNewPosition(
-                    context,
-                    start,
-                    startOffset + match[2].length + ((isSlot && match[3]) || '').length
-                )
-            )
+    // 12. 解析指令的情况，如果是指令会直接 return
+    // ...
 
-            // 12.4.4 获取参数名
-            let content = match[2]
-            // 12.4.5 参数是否是静态参数，默认是
-            let isStatic = true
-
-            // 12.4.6 检测参数是否是动态参数
-            if (content.startsWith('[')) {
-                // 修改静态标识
-                isStatic = false
-
-                // 如果参数没有以 ] 结尾则抛错 - 动态参数错误结尾
-                if (!content.endsWith(']')) {
-                    emitError(
-                        context,
-                        ErrorCodes.X_MISSING_DYNAMIC_DIRECTIVE_ARGUMENT_END
-                    )
-                }
-
-                // 解析动态参数的值，即 [] 中间的值
-                content = content.substr(1, content.length - 2)
-            }
-            // 12.4.7 如果是 v-slot 指令，则需要将修饰符拼接到参数后面
-            else if (isSlot) {
-                content += match[3] || ''
-            }
-
-            // 12.4.8 参数节点
-            arg = {
-                type: NodeTypes.SIMPLE_EXPRESSION,  // 表达式节点
-                content,                            // 参数具体的名称
-                isStatic,                           // 是否是静态参数
-                constType: isStatic // TODO:
-                    ? ConstantTypes.CAN_STRINGIFY
-                    : ConstantTypes.NOT_CONSTANT,
-                loc                                 // 参数定位
-            }
-        }
-
-        // 12.5 将指令值左右两边的 引号 去除，并修改定位信息，后面会有示例
-        if (value && value.isQuoted) {
-            const valueLoc = value.loc
-            valueLoc.start.offset++
-            valueLoc.start.column++
-            valueLoc.end = advancePositionWithClone(valueLoc.start, value.content)
-            valueLoc.source = valueLoc.source.slice(1, -1)
-        }
-
-        // 12.6 返回指令节点
-        return {
-            type: NodeTypes.DIRECTIVE,
-            name: dirName,
-            exp: value && {
-                type: NodeTypes.SIMPLE_EXPRESSION,
-                content: value.content,
-                isStatic: false,
-                // Treat as non-constant by default. This can be potentially set to
-                // other values by `transformExpression` to make it eligible for hoisting.
-                constType: ConstantTypes.NOT_CONSTANT,
-                loc: value.loc
-            },
-            arg,
-            modifiers: match[3] ? match[3].substr(1).split('.') : [],
-            loc
-        }
-    }
-
-    // 13. 返回属性节点
+    // 13. 返回静态属性节点
     return {
         type: NodeTypes.ATTRIBUTE,
         name,
@@ -265,6 +169,111 @@ function parseAttribute(
     }
 }
 ```  
+
+### 解析指令  
+
+```ts
+// 12. 如果当前不处于 v-pre 内，且属性名以 v-、:、@、# 开头，那么会被认为是指令，接下来解析指令
+if (!context.inVPre && /^(v-|:|@|#)/.test(name)) {
+    // 12.1 匹配指令的各个值，各个分组意义如下，以 v-on:click.enter.extra 来说
+    //      1: 指令名，即 on
+    //      2: 参数名，即 click
+    //      3: 修饰符，即 .enter.extra
+    const match = /(?:^v-([a-z0-9-]+))?(?:(?::|^@|^#)(\[[^\]]+\]|[^\.]+))?(.+)?$/i.exec( name )!
+    // 12.2 获取指令名，如果没有解析出指令名，则根据快捷符来解析
+    const dirName =
+        match[1] ||
+        (startsWith(name, ':') ? 'bind' : startsWith(name, '@') ? 'on' : 'slot')
+    
+    // 12.3 参数表达式节点
+    let arg: ExpressionNode | undefined
+    // 12.4 如果参数存在则解析参数
+    if (match[2]) {
+        // 12.4.1 是否是 v-slot 指令
+        const isSlot = dirName === 'slot'
+        // 12.4.2 获取参数在属性名中的偏移，例如 click 在 v-on:click.enter.extra 中的偏移
+        const startOffset = name.indexOf(match[2])
+        // 12.4.3 获取参数的定位，包括动态参数左右两边的 []
+        const loc = getSelection(
+            context,
+            // 获取参数的起始位置：基于 start 向前进 startOffset 长度
+            getNewPosition(context, start, startOffset),
+            // 获取参数的结束位置：基于 start 向前 startOffset + 参数长度
+            // 如果是 v-slot 指令，则还需要再前进 修饰符 的长度，是因为 v-slot 指令的参数需要包含修饰符
+            getNewPosition(
+                context,
+                start,
+                startOffset + match[2].length + ((isSlot && match[3]) || '').length
+            )
+        )
+
+        // 12.4.4 获取参数名
+        let content = match[2]
+        // 12.4.5 参数是否是静态参数，默认是
+        let isStatic = true
+
+        // 12.4.6 检测参数是否是动态参数
+        if (content.startsWith('[')) {
+            // 修改静态标识
+            isStatic = false
+
+            // 如果参数没有以 ] 结尾则抛错 - 动态参数错误结尾
+            if (!content.endsWith(']')) {
+                emitError(
+                    context,
+                    ErrorCodes.X_MISSING_DYNAMIC_DIRECTIVE_ARGUMENT_END
+                )
+            }
+
+            // 解析动态参数的值，即 [] 中间的值
+            content = content.substr(1, content.length - 2)
+        }
+        // 12.4.7 如果是 v-slot 指令，则需要将修饰符拼接到参数后面
+        else if (isSlot) {
+            content += match[3] || ''
+        }
+
+        // 12.4.8 参数节点
+        arg = {
+            type: NodeTypes.SIMPLE_EXPRESSION,  // 简单表达式节点
+            content,                            // 参数具体的名称
+            isStatic,                           // 是否是静态参数
+            constType: isStatic // TODO:
+                ? ConstantTypes.CAN_STRINGIFY
+                : ConstantTypes.NOT_CONSTANT,
+            loc                                 // 参数定位
+        }
+    }
+
+    // 12.5 将指令值左右两边的 引号 去除，并修改定位信息，后面会有示例
+    if (value && value.isQuoted) {
+        const valueLoc = value.loc
+        valueLoc.start.offset++
+        valueLoc.start.column++
+        valueLoc.end = advancePositionWithClone(valueLoc.start, value.content)
+        valueLoc.source = valueLoc.source.slice(1, -1)
+    }
+
+    // 12.6 返回指令节点
+    return {
+        type: NodeTypes.DIRECTIVE,
+        name: dirName,
+        exp: value && {
+            type: NodeTypes.SIMPLE_EXPRESSION,
+            content: value.content,
+            isStatic: false,
+            // Treat as non-constant by default. This can be potentially set to
+            // other values by `transformExpression` to make it eligible for hoisting.
+            constType: ConstantTypes.NOT_CONSTANT,
+            loc: value.loc
+        },
+        arg,
+        modifiers: match[3] ? match[3].substr(1).split('.') : [],
+        loc
+    }
+}
+```  
+
 
 1. 先看将指令的引号去除的意义，存在以下代码  
 
@@ -371,7 +380,7 @@ function parseAttributeValue(context: ParserContext): AttributeValue {
                 m.index
             )
         }
-        // 4.2.3 解析文本内容
+        // 4.2.3 将匹配的内容作为属性值解析
         content = parseTextData(context, match[0].length, TextModes.ATTRIBUTE_VALUE)
     }
 

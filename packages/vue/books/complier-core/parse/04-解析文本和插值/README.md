@@ -62,11 +62,12 @@ function parseText(context: ParserContext, mode: TextModes): TextNode {
 a < b
 ```
 
-解析这段文本时，先碰到了结束符 `<`，所以先会解析文本 `a ` 并截取 
+解析这段文本时，先碰到了结束符 `<`，所以先会解析文本 `a ` 并截取  
 再解析文本 `< b` 时，会被当做文本来解析，再次进入这个函数
 
-如果从 `0` 开始查找，那么找到的结果 `endIndex` 就是 `0`  
-这样的话在第 5 步中解析出来的内容就是 `''`，这是无效的，正确的解析内容应该是 `< b`，所以查找的时候不能从 `0` 开始找  
+如果从 `0` 开始查找，那么 `endIndex` 就是 `0`，这样的话在第 5 步中解析出来的内容就是 `''`，这是无效的  
+而如果从 `1` 开始查找，那么 `endIndex` 就是 `3`(模板长度)，这样在第 5 步中解析出来的内容就是 `< b`  
+所以这里直接跳过了第一个字符，从第二个字符开始查找结束标识，避免结束符出现在开头的情况  
 
 ## 解析文本值  
 这个函数用来解析具体的值，用到的地方会很多，例如文本值，插槽内的值，属性值等等  
@@ -75,8 +76,8 @@ a < b
 ```ts
 function parseTextData(
     context: ParserContext,	// 作用域
-    length: number,					// 解析文本的长度
-    mode: TextModes					// 解析模式
+    length: number,         // 解析文本的长度
+    mode: TextModes         // 解析模式
 ): string {
     // 1. 截取文本
     const rawText = context.source.slice(0, length)
@@ -162,16 +163,21 @@ function pushNode(
 ```ts
 export interface InterpolationNode extends Node {
     type: NodeTypes.INTERPOLATION   // 节点类型为 INTERPOLATION
-    content: ExpressionNode         // 内容节点
+    content: ExpressionNode         // 内容也是一个节点
 }
 ```
 
 **注意：**  
 
-1. 插值节点的 `loc` 是 *原始内容* 的定位信息  
-2. 插值节点的 `content` 对应的是 *去除空白的解析内容* 的节点，而 `content.loc` 则是 “去除空白的解析内容” 的定位信息  
+1. 插值节点的 `loc` 是 “原始内容” 的定位信息  
+2. 插值节点的 `content` 表示 “去除空白的解析内容” 的节点  
 
-接下来看实现  
+接下来看具体实现，会通过下面的示例配合源码  
+
+```html
+{{&nbsp;&nbsp;&quot;abc&quot;&nbsp;&nbsp;}}
+```  
+
 
 ```ts
 function parseInterpolation(
@@ -183,6 +189,7 @@ function parseInterpolation(
 
     // 2. 获取结束符的位置，没有的话则抛错，并返回 undefined
     //    表示没有解析结果，之后会被当做文本由 parseText 继续解析
+    //    上例中是 41
     const closeIndex = context.source.indexOf(close, open.length)
     if (closeIndex === -1) {
         emitError(context, ErrorCodes.X_MISSING_INTERPOLATION_END)
@@ -193,38 +200,39 @@ function parseInterpolation(
     const start = getCursor(context)
     // 4. 使光标前进 开始符 的长度
     advanceBy(context, open.length)
-    // 5. 获取此时光标位置，并作为 有效内容 的开始和结束位置，因为在有效内容左右会存在不确定的空白符，所以之后会修改
+    // 5. 获取此时光标位置作为 content 的开始和结束位置，因为在有效内容左右会存在不确定的空白符，所以之后会修改
     const innerStart = getCursor(context)
     const innerEnd = getCursor(context)
     
-    // 6. 获取原始内容的长度
+    // 6. 获取原始内容的长度，上例中是 39
     const rawContentLength = closeIndex - open.length
-    // 7. 获取原始内容
+    // 7. 获取原始内容，上例中是 '&nbsp;&nbsp;&quot;abc&quot;&nbsp;&nbsp;'
     const rawContent = context.source.slice(0, rawContentLength)
     
-    // 8. 获取解析内容，将原始内容解析，使 context.source 的光标前进原始内容的长度
+    // 8. 获取解析内容，将原始内容解析，使 context.source 的光标前进原始内容的长度，上例中是 '  "abc"  '
     const preTrimContent = parseTextData(context, rawContentLength, mode)
-    // 9. 获取 去除空白的解析内容
+    // 9. 获取 去除空白的解析内容，上例中是 '"abc"'
     const content = preTrimContent.trim()
 
-    // 10. 获取 去除空白的解析内容 前面的空白符数量，其实就是看 content 在 preTrimContent 中的位置
+    // 10. 获取 解析内容 前面的空白符数量，其实就是看 content 在 preTrimContent 中的位置
     //     由于这个位置肯定是 大于 0 的，所以可以理解为空白符的数量
+    //     上例中是 2，所以会使 innerStart 前进 2
     const startOffset = preTrimContent.indexOf(content)
     // 11. 如果有空白符，则将 innerStart 前进 startOffset 长度
     if (startOffset > 0) {
         advancePositionWithMutation(innerStart, rawContent, startOffset)
     }
     
-    // 12. 获取 去除空白的解析内容尾部 相对于 原始内容 的偏移
-    //     先获 去除空白的解析内容尾部 后面空白符的数量：解析内容长度 - 去除空白的解析内容 - 前面的空白符个数
-    //     再用原始内容长度 - 后面的空白符数量，就是后面第一个空白符在原始内容中的位置
-    //     之所以要计算在原始内容中的位置，是因为原始内容是未转换的，而需要将 innerEnd 前进的长度，必须包含那些未转换的字符
+    // 12. 获取结束偏移(解析内容中，后面第一个空白符在原始内容中的位置)
+    //     先获取 解析内容 后面空白符的数量：解析内容长度 - 去除空白的解析内容 - 前面的空白符个数，上例中是 '  "abc"  ' - '"abc"' - 2 = 2
+    //     再用原始内容长度 - 后面的空白符数量，上例中是 39 - 2 = 37
+    //     之所以要计算在原始内容中的位置，是因为原始内容存在未转换的字符，而需要将 innerEnd 前进的长度，必须包含未转换的字符
     const endOffset =
         rawContentLength - (preTrimContent.length - content.length - startOffset)
 
     // 13. 将 innerEnd 前进 endOffset 长度
     advancePositionWithMutation(innerEnd, rawContent, endOffset)
-    // 14. 是光标前进 结束符 的长度
+    // 14. 使光标前进 结束符 的长度
     advanceBy(context, close.length)
 
     // 15. 返回插值节点
@@ -244,17 +252,3 @@ function parseInterpolation(
     }
 }
 ```
-
-接下来用下面这个例子来解释  
-
-```html
-{{ &quot;abc&quot; }}
-
-<!-- 原始内容长度 rawContentLength：17 -->
-<!-- 原始内容 rawContent： ' &quot;abc&quot; ' -->
-<!-- 解析内容 preTrimContent：' "abc" ' -->
-<!-- 去除空白符的解析内容 content：'"abc"' -->
-<!-- content 第一个字符在原始内容中的位置 startOffset：1 -->
-<!-- content 后第一个空白符在原始内容中的位置 endOffset：16 -->
-```
-

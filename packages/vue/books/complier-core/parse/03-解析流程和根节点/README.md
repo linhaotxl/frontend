@@ -3,15 +3,14 @@
 - [解析入口](#解析入口)
 - [创建根节点](#创建根节点)
 - [解析子节点](#解析子节点)
-    - [处理空白符](#处理空白符)
+    - [删除空白符](#删除空白符)
 - [判断是否结束 isEnd](#判断是否结束-isend)
+- [startsWithEndTagOpen](#startswithendtagopen)
 
 <!-- /TOC -->
 
 ## 解析入口  
-接下来就从解析入口开始，详细了解这一阶段都做了什么  
-
-入口是从 `baseParse` 函数开始，这个函数并不难，只是创建了一些解析过程中会用到的内容  
+接下来就从入口函数 `baseParse` 开始，先来看入口函数做了什么  
 
 ```ts
 export function baseParse(
@@ -24,7 +23,7 @@ export function baseParse(
     const start = getCursor(context)
     // 3. 创建根节点
     return createRoot(
-        // 3.1 解析所有子节点，这个函数后面会说
+        // 3.1 以 TextModes.DATA 模式解析所有子节点
         parseChildren(context, TextModes.DATA, []),
         // 3.2 解析完所有的子节点，获取从模板开始一直到结束的定位
         getSelection(context, start)
@@ -32,13 +31,9 @@ export function baseParse(
 }
 ```
 
-注意：  
-1. 在解析所有的子节点后，会获取 “模板开始位置” 到 “模板结束位置” 的定位信息  
-    这样，就能获取到整个模板的定位
-2. 在始解析子节点时，会按照 `TextModes.DATA` 的模式去解析  
-
 ## 创建根节点  
-在入口函数中创建了根节点，接下来先看根节点的结构，其中很多属性在这个阶段都还用不到，只需要关注 `type` 和 `children` 即可  
+根节点是整个模板最外面的一层节点，它里面会包含模板里的每个节点，先来看根节点的结构  
+**由于其中很多属性在这个阶段都还用不到，只需要关注 `type` 和 `children` 即可**
 
 ```ts
 export interface RootNode extends Node {
@@ -60,7 +55,7 @@ export interface RootNode extends Node {
 
 ```ts
 export function createRoot(
-    children: TemplateChildNode[], // 子节点列表
+    children: TemplateChildNode[], // 模板中节点列表
     loc = locStub                  // 整个模板的定位
 ): RootNode {
     return {
@@ -80,15 +75,14 @@ export function createRoot(
 ```
 
 ## 解析子节点  
-由于子节点的类型可以是各种各样的，所以这个函数可以说是包括了所有情况  
+由于子节点的类型有很多(文本、插值、注释、元素等等)，所以这个函数只会检测属于哪种类型，再由其他方法完成具体的解析过程  
 先来看看它都有哪些参数  
 
 1. `context`：作用域对象  
 2. `mode`：解析子节点的模式  
-3. `ancestors`：父节点列表  
-    源码中是这样存储每个父节点的：当解析一个元素时，会先解析开始标签，然后将结果存入 `ancestors` 中  
+3. `ancestors`：父节点列表(是一个栈结构)  
+    源码中是这样存储每个父节点的：当解析一个元素时，会先解析开始标签，解析完成后将结果存入 `ancestors` 中  
     接着再解析所有的子节点，等到所有的子节点都解析完时，再将前面存进去的节点取出  
-    所以，`ancestors` 中的每个元素都是父节点，越往后则越靠向当前解析的内容  
 
 接下来先看大致的流程  
 
@@ -114,13 +108,13 @@ function parseChildren(
         // 4.2 解析后的节点
         let node: TemplateChildNode | TemplateChildNode[] | undefined = undefined
 
-        // 4.3 只有 DATA 和 RCDATA 两种模式才会进行下面的解析
+        // 4.3 只有 DATA 和 RCDATA 两种模式才会进行解析
         if (mode === TextModes.DATA || mode === TextModes.RCDATA) {
             // 4.3.1 解析插值表达式，必须不存在于 v-pre 指令内，且开头是以插值表达式的分隔符开始的
             if (!context.inVPre && startsWith(s, context.options.delimiters[0])) {
                 node = parseInterpolation(context, mode)
             } 
-            // 4.3.2 解析除插值表达式之外的情况，必须处于 普通模式 且第一个字符是 <
+            // 4.3.2 解析除插值表达式之外的情况，必须处于 DATA 且第一个字符是 <
             else if (mode === TextModes.DATA && s[0] === '<') {
                 // 4.3.2.1 如果只有一个 < 字符，那么就说明少了标签名，抛错，接下来会被当做文本解析
                 if (s.length === 1) {
@@ -200,7 +194,7 @@ function parseChildren(
             
         }
 
-        // 4.4 上面没有匹配的情况，会被当做文本解析
+        // 4.4 上面没有匹配的情况，就会被当做文本解析
         if (!node) {
             node = parseText(context, mode)
         }
@@ -218,43 +212,40 @@ function parseChildren(
     // 5. 是否需要删除空白符，这部分内容后面看
     let removedWhitespace = false
 
+    // ...
+
     // 6. 返回子节点列表
     return removedWhitespace ? nodes.filter(Boolean) : nodes
 }
 ```
 
-总结：  
-1. 文本数据中也是可以解析插值表达式的  
+注意：文本域中如果存在插值表达式，只有在不处于 `v-pre` 的情况下才会解析  
 
 这里只需要先大致熟悉流程，清楚是如何处理不同类型的节点，在接下内容中会依次说到每种类型的节点  
 了解完一个类型的节点后，再跳回来对着流程过一遍，会更加理解过程  
 
-### 处理空白符  
+### 删除空白符  
 这里把这部分单独拿出来，这块逻辑比较简单，不用和上面的流程合在一块看  
-主要移除的节点有这么几类  
-1. 注释节点  
-2. 空白符节点，前提是不在 `pre` 中的  
-
-还要注意一点的是，如果在 `RAWTEXT` 模式下，是不会进行任何操作的，此模式需要保留所有的内容  
-接下来看具体实现  
+在以下几种情况中，会将空白符移除，不会实际渲染  
+要注意的是，删除空白符，必须处于 非 `RAWTEXT` 模式下  
 
 ```ts
 let removedWhitespace = false
 // 排除 RAWTEXT 模式
 if (mode !== TextModes.RAWTEXT) {
-    // 1. 遍历所有节点，处理非 pre 中的空白符以及注释
+    // 1. 遍历所有子节点
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i]
-        // 1.1 处理非 pre 中的空白符
+        // 1.1 如果不处于 pre 标签内，且是一个文本节点，则进行下一步处理
         if (!context.inPre && node.type === NodeTypes.TEXT) {
-            // 1.1.1 当前节点中只含有空白符时，存在以下情况会将当前节点删除
-            //       a. 当前文本节点是 第一个 或 最后一个
-            //       b. 当前文本节点前后存在注释
-            //       c. 当前文本节点前后都是元素，且当前文本中只含有换行符
-            //       否则只会将当前文本节点重置为一个空格
+            // 1.1.1 若当前节点中只含有空白符时，会进行下面的处理
             if (!/[^\t\r\n\f ]/.test(node.content)) {
                 const prev = nodes[i - 1]
                 const next = nodes[i + 1]
+                // 1.1.1.1 以下情况会将当前节点删除
+                //      a. 当前文本节点是 第一个 或 最后一个
+                //      b. 当前文本节点前后是注释
+                //      c. 当前文本节点前后都是元素，且当前文本中只含有换行符
                 if (
                     !prev ||
                     !next ||
@@ -266,17 +257,20 @@ if (mode !== TextModes.RAWTEXT) {
                 ) {
                     removedWhitespace = true
                     nodes[i] = null as any
-                } else {
+                }
+                // 1.1.1.2 否则只会将当前文本节点重置为一个空格
+                else {
                     // {{ name }} \n {{ age }} -> {{ name }} {{ age }}
                     node.content = ' '
                 }
             }
-            // 1.1.2 如果当前节点存在有效字符，则会将其中的空白符都替换为空格
+            // 1.1.2 如果当前节点除了空白符，还存在有效字符，则会将其中的空白符都替换为空格
             else {
                 // '   foo  \n    bar     baz     ' -> ' foo bar baz '
                 node.content = node.content.replace(/[\t\r\n\f ]+/g, ' ')
             }
         }
+        
         // 1.2 处理注释节点，如果选项 comments 为 false，则会将注释节点移除，只会用于生产环境
         if (
             !__DEV__ &&
@@ -287,7 +281,8 @@ if (mode !== TextModes.RAWTEXT) {
             nodes[i] = null as any
         }
     }
-    // 2. 如果当前处于 pre 内第一层子节点中，并且第一个节点是文本节点，则会将文本开头的换行符清掉
+    
+    // 2. 如果 pre 内的第一个子节点是文本，则会将文本的开头的换行符移除
     if (context.inPre && parent && context.options.isPreTag(parent.tag)) {
         // https://html.spec.whatwg.org/multipage/grouping-content.html#the-pre-element
         const first = nodes[0]
@@ -296,16 +291,28 @@ if (mode !== TextModes.RAWTEXT) {
         }
     }
 }
-```
+```  
+
+对应第 2 步的示例  
+
+```html
+<pre>
+  foo  bar
+</pre>
+
+<!-- 会被解析为 -->
+<pre>  foo  bar
+</pre>
+```  
 
 ## 判断是否结束 isEnd  
-每次解析完一个节点后，都会调用这个函数来判断是否结束，不同 `TextModes` 的结束标识是不同的，记下来看实现  
+每次解析完一个类型的节点后，都会调用这个函数来判断是否结束，不同 `TextModes` 的结束标识是不同的，接下来看实现  
 
 ```ts
 function isEnd(
-    context: ParserContext,
-    mode: TextModes,
-    ancestors: ElementNode[]
+    context: ParserContext,     // 作用域
+    mode: TextModes,            // 解析模式
+    ancestors: ElementNode[]    // 父节点列表
 ): boolean {
     const s = context.source
 
@@ -345,4 +352,20 @@ function isEnd(
     // 如果模板还有内容，则代表没有结束；如果没有内容了，则代表已经结束
     return !s
 }
-```
+```  
+
+## startsWithEndTagOpen  
+检测模板是否以指定标签结束  
+
+```ts
+function startsWithEndTagOpen(source: string, tag: string): boolean {
+    return (
+        // 模板必须以结束符 </ 开头
+        startsWith(source, '</') &&
+        // 模板结束符的标签名必须和指定 tag 一致
+        source.substr(2, tag.length).toLowerCase() === tag.toLowerCase() &&
+        // 标签名后边的字符，必须是空白符或者 >
+        /[\t\r\n\f />]/.test(source[2 + tag.length] || '>')
+    )
+}
+```  

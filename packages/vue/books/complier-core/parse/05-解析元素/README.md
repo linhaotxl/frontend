@@ -5,8 +5,6 @@
 
 <!-- /TOC -->
 
-这篇开始将进入“元素”的解析阶段  
-
 ## 解析元素  
 元素的解析由 `parseElement` 完成，一个元素可以分为三部分  
 1. 开始标签(包括属性、指令)  
@@ -69,7 +67,7 @@ function parseElement(
     // 13. 更新定位信息，从开始标签一直到结束标签
     element.loc = getSelection(context, element.loc.start)
 
-    // 14. 如果当前是 pre 标签或者存在 v-pre 指令，则需要恢复作用域中的值
+    // 14. 如果当前是 pre 或者 v-pre 的边界，则需要恢复作用域中的值
     if (isPreBoundary) {
         context.inPre = false
     }
@@ -92,7 +90,7 @@ function parseElement(
     * 如果为 `true`，可能是以下两种情况之一  
         1. 这是一个 `pre` 标签，或者存在 `v-pre` 指令  
         2. 当前已经存在于 `pre` 标签，或者 `v-pre` 指令内  
-        再来检测之前作用域中的值，如果之前的值为 `false`，说明现在就是 “情况1”，是边界；否则就是 “情况2”，不是边界  
+        再来检测之前作用域中的值，如果之前的值为 `false`，说明现在就是 “情况a”，是边界；否则就是 “情况b”，不是边界  
     * 如果为 `false`，则说明以上两种情况都不是，那么肯定不是边界  
 
 2. 可以看出，元素节点 `element` 是由 `parseTag` 产生的，而 `parseElement` 只是进一步做了其他处理  
@@ -204,19 +202,19 @@ function parseTag(
     // 1. 获取解析前的光标位置
     const start = getCursor(context)
     // 2. 解析标签名
-    //    解析到的内容就是带尖括号和结束标签的 / 的，例如 <div 或者 </div ，并且名会在第一个分组
+    //    例如 <div></div>，解析到的就是 <div 和 </div ，并且会在第一个分组
     const match = /^<\/?([a-z][^\t\r\n\f />]*)/i.exec(context.source)!
     const tag = match[1]
 
     // 3. 获取命名空间
     const ns = context.options.getNamespace(tag, parent)
 
-    // 4. 前进匹配到的长度，例如前进 <div 个长度
+    // 4. 前进匹配到的长度，例如前进 <div 或 </div 的长度
     advanceBy(context, match[0].length)
     // 5. 前进空白符的长度，例如 <div 和属性 id="root" 中间的空白符
     advanceSpaces(context)
 
-    // 6. 获取此时的光标位置，以及模板内容，是从属性开始的
+    // 6. 获取此时的光标位置，以及模板内容，是从属性开头的
     const cursor = getCursor(context)
     const currentSource = context.source
 
@@ -228,7 +226,8 @@ function parseTag(
         context.inPre = true
     }
 
-    // 9. 如果不是 pre 标签，但是存在 v-pre 指令
+    // 9. 如果存在 v-pre 指令，则需要进一步操作
+    //    如果嵌套 v-pre，则里面的 v-pre 不会进行这一步
     if (
         !context.inVPre &&
         props.some(p => p.type === NodeTypes.DIRECTIVE && p.name === 'pre')

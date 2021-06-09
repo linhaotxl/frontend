@@ -9,7 +9,7 @@
 
 <!-- /TOC -->
 
-浏览器平台下的解析，流程还是和以前一样，唯一不同的就是配置，接下来主要来看配置都发生了什么变化  
+浏览器平台下的解析，流程还是和以前一样，唯一不同的就是解析的配置，接下来主要来看配置都发生了什么变化  
 
 ```ts
 export const parserOptions: ParserOptions = {
@@ -20,23 +20,22 @@ export const parserOptions: ParserOptions = {
 
     isBuiltInComponent: (tag: string): symbol | undefined => {
         if (isBuiltInType(tag, `Transition`)) {
-        return TRANSITION
+            return TRANSITION
         } else if (isBuiltInType(tag, `TransitionGroup`)) {
-        return TRANSITION_GROUP
+            return TRANSITION_GROUP
         }
     },
 
-    getNamespace: () {},
+    getNamespace: () { /* ... */ },
 
-    getTextMode: () {},
+    getTextMode: () { /* ... */ },
 }
 ```  
 
-先来看几个简单的配置，最后两个都和 `namespace` 有关，最后再看  
-
+接下来看会一个一个看具体的配置内容  
 
 ## 是否是闭合标签  
-源码中将所有的闭合标签都列了出来，并将它们合成为一个对象，值为 `true`，用来检测  
+源码中将所有的闭合标签都列了出来，并将它们标记为一个对象，用来检测自闭和标签  
 
 ```ts
 const VOID_TAGS = 'area,base,br,col,embed,hr,img,input,link,meta,param,source,track,wbr'
@@ -48,7 +47,7 @@ export const isVoidTag = /*#__PURE__*/ makeMap(VOID_TAGS)
 1. 普通 `HTML` 标签  
 2. `SVG` 里的标签  
 
-源码中也是将它们都列了出来，并标记为对象  
+源码中也是将它们都列了出来，并标记为对象，分别检测  
 
 ```ts
 const HTML_TAGS =
@@ -79,8 +78,8 @@ export const isSVGTag = /*#__PURE__*/ makeMap(SVG_TAGS)
 ```  
 
 ## 解码实体字符  
-至于解码实体字符，其实是通过浏览器的功能来完成的  
-创建空的容器，将原始内容存入，这时候浏览器会将原始内容自动转换  
+解码实体字符，其实是通过浏览器的功能来完成的  
+会创建一个空的 `div` 容器，将未解码的内容存入 `div` 中，然后再通过 `textContent` 取出，浏览器会自动完成解析  
 
 ```ts
 let decoder: HTMLDivElement
@@ -115,7 +114,7 @@ export const enum DOMNamespaces {
 }
 ```  
 
-还存在一些其他情况，例如在 `svg` 或 `math` 中，出现了一些其他的标签，这个时候命名空间会发生变化  
+除了直接使用上面三种命名空间外，还存在一些交叉的情况，这个时候命名空间会发生变化  
 因为情况比较多，直接看代码  
 
 ```ts
@@ -208,12 +207,13 @@ getNamespace(tag: string, parent: ElementNode | undefined): DOMNamespaces {
 ```  
 
 ## 文本解析模式  
+每次在解析子节点之前，都会先通过这个函数获取解析子节点的模式  
 
 ```ts
 getTextMode({ tag, ns }: ElementNode): TextModes {
     // 1. 只会处理 HTML 命名空间下的标签
     if (ns === DOMNamespaces.HTML) {
-        // textarea 和 title 采用 RCDATA 模式
+        // textarea 和 title 标签采用 RCDATA 模式
         if (tag === 'textarea' || tag === 'title') {
             return TextModes.RCDATA
         }

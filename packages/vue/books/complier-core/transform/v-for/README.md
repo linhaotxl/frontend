@@ -20,7 +20,7 @@
 1. 项目 -> `item`  
 2. key -> `key`  
 3. 索引 -> `index`  
-4. 目标 -> `items`  
+4. 源数据 -> `items`  
 5. 原始内容 -> `( item, key, index )`  
 6. 有效内容(原始内容去除括号和左右的空白符) -> `item, key, index`  
 
@@ -28,14 +28,14 @@
 
 ```ts
 export interface ForParseResult {
-    source: ExpressionNode              // 目标节点
+    source: ExpressionNode              // 源数据节点
     value: ExpressionNode | undefined   // 项目节点
     key: ExpressionNode   | undefined   // key 值节点
     index: ExpressionNode | undefined   // 索引节点
 }
 ```  
 
-其中除了 “目标节点” 外，剩余三个节点都可以为 `undefined`，当省略了其中的某个内容时，对应的节点就是 `undefined` 了，如下  
+其中除了 “源数据节点” 外，剩余三个节点都可以为 `undefined`，当省略了其中的某个内容时，对应的节点就是 `undefined` 了，如下  
 
 ```html
 <!-- 省略 项目 -->
@@ -68,7 +68,7 @@ export function parseForExpression(
     if (!inMatch) return
     const [, LHS, RHS] = inMatch
     
-    // 3. 创建解析结果，并根据右侧的值生成目标节点，其余均初始化为 undefined
+    // 3. 创建解析结果，并根据右侧的值生成源数据节点，其余均初始化为 undefined
     const result: ForParseResult = {
         source: createAliasExpression(
             loc,
@@ -80,7 +80,7 @@ export function parseForExpression(
         index: undefined
     }
 
-    // 4. 对目标增加来源前缀
+    // 4. 对源数据增加来源前缀
     if (!__BROWSER__ && context.prefixIdentifiers) {
         result.source = processExpression(
             result.source as SimpleExpressionNode,
@@ -159,7 +159,7 @@ export function parseForExpression(
 ```ts
 export interface ForNode extends Node {
     type: NodeTypes.FOR                           // 节点类型
-    source: ExpressionNode                        // 目标节点
+    source: ExpressionNode                        // 源数据节点
     valueAlias: ExpressionNode | undefined        // 项目节点
     keyAlias: ExpressionNode | undefined          // key 节点
     objectIndexAlias: ExpressionNode | undefined  // 索引节点
@@ -201,7 +201,7 @@ export function processFor(
     const { addIdentifiers, removeIdentifiers, scopes } = context
     const { source, value, key, index } = parseResult
 
-    // 3. 创建 v-for 节点，并将第 2 步中的结果也存入节点中
+    // 3. 创建 v-for 节点，并将第 2 步中的解析结果也存入
     const forNode: ForNode = {
         type: NodeTypes.FOR,
         loc: dir.loc,
@@ -269,16 +269,16 @@ export interface ForIteratorExpression extends FunctionExpression {
   returns: BlockCodegenNode
 }
 ```  
-可以看出，`v-for` 的生成器是一个 `Fragment` 的创建，并且子节点是 `renderList` 的函数调用  
+可以看出，`v-for` 的生成器是一个 `Fragment` 节点的创建，并且子节点是 `renderList` 的函数调用  
 `renderList` 有两个参数  
-1. 是一个 `ExpressionNode`，其实就是目标节点  
-2. 是一个 `FunctionExpression`，就是具体渲染子节点的函数  
+1. 是一个 `ExpressionNode`，其实就是源数据节点  
+2. 是一个 `FunctionExpression`，就是具体渲染子节点的函数，这个函数又有三个参数，分别是 项目、`key` 以及索引   
 
 接下来看具体的创建过程  
 
 ```ts
 return processFor(node, dir, context, forNode => {
-    // 1. 创建 renderList 函数调用，参数就是目标节点
+    // 1. 创建 renderList 函数调用，参数就是源数据节点
     const renderExp = createCallExpression(helper(RENDER_LIST), [
         forNode.source
     ]) as ForRenderListExpression
@@ -286,7 +286,7 @@ return processFor(node, dir, context, forNode => {
     // 2. 查找节点上是否存在 key 属性
     const keyProp = findProp(node, `key`)
     // 3. 创建 key 的属性节点
-    //    如果 key 是静态属性，则创建对应的简单表达式(此时 key 节点的值是一个文本)
+    //    如果 key 是静态属性，则创建对应的简单表达式(对于静态属性的节点来说，它的值是一个文本)
     //    如果 key 是指令，则直接使用指令值
     const keyProperty = keyProp
         ? createObjectProperty(
@@ -305,7 +305,7 @@ return processFor(node, dir, context, forNode => {
         )
     }
 
-    // 5. 检测生成的 Fragment 是否是稳定的
+    // 5. 检测生成的 Fragment 是否是稳定的，具体可以参考后面的示例
     const isStableFragment =
         forNode.source.type === NodeTypes.SIMPLE_EXPRESSION &&
         forNode.source.constType > 0
@@ -323,16 +323,18 @@ return processFor(node, dir, context, forNode => {
         helper(FRAGMENT),
         undefined,
         renderExp,
-        fragmentFlag +
-            (__DEV__ ? ` /* ${PatchFlagNames[fragmentFlag]} */` : ``),
+        fragmentFlag + (__DEV__
+            ? ` /* ${PatchFlagNames[fragmentFlag]} */`
+            : ``
+        ),
         undefined,
         undefined,
         true                // 生成的 Fragment 始终会开启 Block
-        !isStableFragment   // 不是稳定的情况下，才会追踪
+        !isStableFragment   // 不稳定的情况下，才会追踪
         node.loc
     ) as ForCodegenNode
 
-    // 8. 退出函数
+    // 8. 生成器的退出函数
     return () => {}
 }
 ```  
@@ -345,16 +347,17 @@ return processFor(node, dir, context, forNode => {
     * `PatchFlags.KEYED_FRAGMENT`: 子节点中含有 `key` 的 `Fragment`，它的子节点在更新时会根据 `key` 进行 `diff` 算法来更新  
     * `PatchFlags.UNKEYED_FRAGMENT`: 子节点没有 `key` 的 `Fragment`，它的子节点在更新时会全量更新  
 
-    在第 5 步中，只有目标是简单表达式，并且存在常量类型时才会被认为是 “稳定” 的，看下面这个示例  
+    在第 5 步中，只有源数据是简单表达式，并且存在常量类型时才会被认为是 “稳定” 的，看下面这个示例  
 
     ```html
     <div v-for="item in 10"></div>
     ```  
 
-    这个示例中的目标是 `10`，它是一个简单表达式，并且 `constType` 是 `ConstantTypes.CAN_STRINGIFY`，所以生成的 `Fragment` 就是稳定的  
+    这个示例中的源数据是 `10`，它是一个简单表达式，并且 `constType` 是 `ConstantTypes.CAN_STRINGIFY`，所以生成的 `Fragment` 就是稳定的  
     也就是顺序不会发生变化，始终是 `10` 个  
     
-    由于 `v-for` 值的节点初始时都是 `ConstantTypes.NOT_CONSTANT` 的，唯一能发生变化就是 [解析](#解析-v-for-的值) 中的第 4 步，通过 `transformExpression` 钩子改变  
+    由于 `v-for` 值的节点初始时都是 `ConstantTypes.NOT_CONSTANT` 的，唯一能发生变化就是 [解析](#解析-v-for-的值) 中的第 4 步  
+    通过 `transformExpression` 钩子改变  
 
 3. 在第 7 步创建 `Fragment` 生成器的时候，是否需要追踪是根据 `isStableFragment` 取反决定的  
     * 稳定状态下需要追踪  
@@ -367,13 +370,13 @@ return processFor(node, dir, context, forNode => {
 
 ```ts
 return () => {
-    // 1. 定义 v-for 具体要渲染的节点
+    // 1. 定义 v-for 具体要渲染的节点，也就是 renderList 函数的内容
     let childBlock: BlockCodegenNode
-    // 2. 检测存在 v-for 的节点是否是 template
+    // 2. 检测是否是 template 上存在 v-for
     const isTemplate = isTemplateNode(node)
     // 3. 获取子节点列表
-    //    如果存在 v-for 节点不是 template，那么 children 就是由这一个节点组成的数组
-    //    如果存在 v-for 节点是 template，那么 children 就是 template 的子节点列表
+    //    如果不是 template，那么 children 就是由存在 v-for 指令的节点组成的数组
+    //    如果是 template，那么 children 就是 template 的子节点列表
     const { children } = forNode
 
     // 4. 检测子节点外面是否需要包裹 Fragment
@@ -440,8 +443,9 @@ return () => {
         }
     }
 
-    // 9. 向 renerList 函数添加第 2 个参数，是一个函数，返回的是 childBlock，也就是子节点的渲染器，渲染子节点
+    // 9. 向 renerList 函数添加第 2 个参数渲染函数
     //    首先会通过 createForLoopParams 以及 v-for 的解析结果 forNode.parseResult 来创建函数的参数
+    //    渲染结果就是 childBlock
     renderExp.arguments.push(createFunctionExpression(
         createForLoopParams(forNode.parseResult),
         childBlock,

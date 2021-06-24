@@ -3,17 +3,17 @@
 - [什么是转换](#什么是转换)
 - [转换阶段流程](#转换阶段流程)
 - [作用域](#作用域)
-    - [帮助模块 —— helper](#帮助模块--helper)
-    - [替换节点 —— replaceNode](#替换节点--replacenode)
-    - [删除节点 —— removeNode](#删除节点--removenode)
-- [转换入口 —— transform](#转换入口--transform)
-    - [节点生成器](#节点生成器)
-    - [补充根节点结构](#补充根节点结构)
+    - [节点钩子函数](#节点钩子函数)
+    - [指令钩子函数](#指令钩子函数)
+    - [创建作用域](#创建作用域)
+        - [帮助模块 —— helpers](#帮助模块--helpers)
+        - [替换节点 —— replaceNode](#替换节点--replacenode)
+        - [删除节点 —— removeNode](#删除节点--removenode)
 
 <!-- /TOC -->
 
 ## 什么是转换
-经过第一阶段的“解析”，我们得到了 `AST` 节点，从这章开始，会进入第二步 —— 转换(Trasnform)  
+经过第一阶段的 “解析”，我们得到了 `AST` 节点，从这章开始，会进入第二步 —— 转换(Trasnform)  
 
 转换就是操作 `AST` 节点，将它修改为我们需要的节点  
 例如，我们将 `v-if` 指令，转换为了两个节点，一个是满足条件需要渲染的节点，一个是不满足条件渲染的节点(默认为注释节点)，如下  
@@ -22,7 +22,7 @@
 <div v-if="a">Hello World!</div>
 ```  
 
-上面的 `div` 会得到一个 `ElementNode`，我们会将这个节点转化为条件表达式节点，伪代码如下
+上面的 `div` 解析后会得到一个 `ElementNode`，我们会将这个节点转化为条件表达式节点，伪代码如下
 
 ```ts
 // 条件表达式节点
@@ -34,20 +34,27 @@
 ```  
 
 ## 转换阶段流程  
-转换阶段最重要的就是钩子函数，钩子函数分为两种  
-1. 节点钩子函数  
-2. 指令钩子函数  
-经过第一步 “解析” 后，获取到根节点，从顶向下依次遍历每个节点，对每个节点执行 “节点钩子函数”，对节点的每个指令执行 “指令钩子函数”，
+1. 创建 “转换” 过程的作用域对象  
+2. 从根节点开始依次向下，对每一个节点依次调用 “节点钩子函数”，在对节点中每个的 `prop` 依次调用 “指令钩子函数”   
+
+至此，遍历了所有的节点，并且完成了对每个节点的转换，得到了最终的 “生成器”  
+在第三步 “生成” 中，会根据 “生成器” 来创建具体的渲染函数代码  
+
+接下来先来看看上面提到的几个内容  
 
 ## 作用域   
-“转换” 阶段也存在一个作用域对象，包含了这个阶段会用到的一些属性和方法，先来看作用域的配置对象  
+“转换” 阶段也存在一个作用域对象，包含了这个阶段会用到的一些属性和方法，先来看作用域的配置对象都有哪些  
 
 ```ts
 export interface TransformOptions extends SharedTransformCodegenOptions {
-    // 节点转换的钩子函数
+    /**
+     * 节点转换的钩子函数集合
+     */
     nodeTransforms?: NodeTransform[]
 
-    // 指令转换钩子集合，其中 key 是指令名，value 是转换函数
+    /**
+     * 指令转换钩子集合，其中 key 是指令名，value 是转换函数
+     */
     directiveTransforms?: Record<string, DirectiveTransform | undefined>
 
     transformHoist?: HoistTransform | null
@@ -56,12 +63,20 @@ export interface TransformOptions extends SharedTransformCodegenOptions {
 
     isCustomElement?: (tag: string) => boolean | void
 
-    // 是否增加标识前缀，即增加数据来源
-    // 例如在模板中 {{ name }}，会被转换为 {{ _ctx.name }}
+    /**
+     * 是否增加标识前缀，即增加数据来源
+     * 例如在模板中 {{ name }}，会被转换为 {{ _ctx.name }}
+     */
     prefixIdentifiers?: boolean
 
+    /**
+     * 是否需要提升静态节点
+     */
     hoistStatic?: boolean
 
+    /**
+     * 是否需要缓存事件函数
+     */
     cacheHandlers?: boolean
 
     expressionPlugins?: ParserPlugin[]
@@ -76,24 +91,98 @@ export interface TransformOptions extends SharedTransformCodegenOptions {
 ```  
 
 ```ts
+// 转换节点和生成节点共用的配置
 interface SharedTransformCodegenOptions {
+    // 同上
     prefixIdentifiers?: boolean
 
     ssr?: boolean
 
     bindingMetadata?: BindingMetadata
 
+    
     inline?: boolean
 
+    /**
+     * 是否是 TS 语言环境
+     */
     isTS?: boolean
 
     filename?: string
 }
 ```  
 
+### 节点钩子函数  
+“节点钩子函数” 作用于每个具体的节点，它可以用来修改节点的结构以及类型，先来看看它的结构  
+
+```ts
+export type NodeTransform = (
+    node: RootNode | TemplateChildNode, // 需要处理的节点
+    context: TransformContext           // 作用域
+) => void | (() => void) | (() => void)[]
+```  
+
+它的返回值可以是函数或者函数列表，我们把返回值称为 “退出函数”  
+“退出函数” 并不会立即执行，而是会等到这个节点的所有子节点都完成转换时再去执行  
+
+上面说到的具体的节点就是 `RootNode` 以及 `TemplateChildNode`，来看 `TemplateChildNode` 都包括哪些  
+
+```ts
+export type TemplateChildNode =
+    | ElementNode               // 元素节点
+    | InterpolationNode         // 插值节点
+    | CompoundExpressionNode    // 复合表达式节点
+    | TextNode                  // 普通文本节点
+    | CommentNode               // 注释节点
+    | IfNode                    // v-if 节点
+    | IfBranchNode              // v-if 分支节点
+    | ForNode                   // v-for 节点
+    | TextCallNode              // 创建文本节点
+```  
+
+现在不清楚的节点之后会依次介绍  
+
+### 指令钩子函数  
+“指令钩子函数” 作用于每个具体的指令节点，因为指令也是属性的一种，所以这个钩子的作用就是将指令 “转换” 为属性  
+作用域中的 `directiveTransforms` 形式类似于  
+
+```ts
+{
+    on: transformOn,
+    bind: transformBind,
+    model: transformModel
+}
+```  
+
+接下来就看看 “指令钩子函数” 的结构  
+
+```ts
+export type DirectiveTransform = (
+    dir: DirectiveNode,           // 指令节点
+    node: ElementNode,            // 元素节点，因为指令只能存在于元素上
+    context: TransformContext,    // 作用域
+    // 增加函数，由具体平台提供，参数是转换的指令结果
+    // 例如 浏览器环境 可以提供该函数，继续对一些指令再次处理
+    augmentor?: (ret: DirectiveTransformResult) => DirectiveTransformResult
+) => DirectiveTransformResult
+```   
+
+返回的结果是 `DirectiveTransformResult`，看看它的结构  
+
+```ts
+export interface DirectiveTransformResult {
+    props: Property[]                           // 转换好的属性集合
+    needRuntime?: boolean | symbol              // 
+    ssrTagParts?: TemplateLiteral['elements']
+}
+```  
+
+### 创建作用域  
 接下来看创建作用域对象的过程，接受两个参数  
 1. 根节点  
 2. 作用域配置对象  
+
+作用域对象的结构是 `TransformContext`，它的结构直接看创建过程  
 
 ```ts
 export function createTransformContext(
@@ -122,11 +211,11 @@ export function createTransformContext(
     const context: TransformContext = {
         // options
         selfName: nameMatch && capitalize(camelize(nameMatch[1])),
-        prefixIdentifiers,
-        hoistStatic,
-        cacheHandlers,
-        nodeTransforms,
-        directiveTransforms,
+        prefixIdentifiers,      // 是否需要增加数据来源前缀
+        hoistStatic,            // 是否需要提示静态节点
+        cacheHandlers,          // 是否需要缓存事件处理函数
+        nodeTransforms,         // 节点钩子函数集合
+        directiveTransforms,    // 指令钩子函数集合
         transformHoist,
         isBuiltInComponent,
         isCustomElement,
@@ -157,9 +246,9 @@ export function createTransformContext(
             vOnce: 0
         },
         
-        parent: null,       // 当前正在执行勾子函数节点 的父节点
         currentNode: root,  // 当前正在执行勾子函数的节点
-        childIndex: 0,      // 当前正在执行勾子函数节点在父节点中的索引
+        parent: null,       // currentNode 的父节点
+        childIndex: 0,      // currentNode 在 parent 中的索引
 
         // methods
         helper(name) {},
@@ -181,11 +270,13 @@ export function createTransformContext(
 }
 ```  
 
-### 帮助模块 —— helper  
+接下里会介绍几个通用的属性，剩下的会在具体的使用场景中介绍  
+
+#### 帮助模块 —— helpers  
 什么是帮助模块？  
 例如在模板中，针对每个元素，都会通过 `createVNode` 创建一个 `vnode` 对象，或者使用了内置组件 `suspense`、`kepp-alive` 等  
 上面的 `createVNode`、`suspense`、`keep-alive` 都需要从 `vue` 模块中导入再使用  
-所以，帮助模块可以理解为需要导入的函数或变量，这些模块都可以在 “`runtime-core`” 包里找到，接下来看看都有哪些模块函数  
+所以，帮助模块可以理解为需要导入的函数或变量，这些模块都可以在 “runtime-core” 包里找到，接下来看看都有哪些模块函数  
 
 ```ts
 // 模块标识，注意都是 Symbol
@@ -221,7 +312,7 @@ export const WITH_CTX = Symbol(__DEV__ ? `withCtx` : ``)
 export const UNREF = Symbol(__DEV__ ? `unref` : ``)
 export const IS_REF = Symbol(__DEV__ ? `isRef` : ``)
 
-// 模块标识 -> 模块名称，与 runtime-core 中的名称对应
+// 模块标识 -> 模块名称，模块名称与 runtime-core 中的名称对应
 export const helperNameMap: any = {
     [FRAGMENT]: `Fragment`,
     [TELEPORT]: `Teleport`,
@@ -257,8 +348,8 @@ export const helperNameMap: any = {
 }
 ```  
 
-在转换的过程中，如果需要使用这些模块，那么会通过 `context.helper` 函数，将模块标识存入 `context.helpers` 集合中  
-在之后的 “生成” 阶段，会将 `helpers` 中的标识，依据 `helperNameMap`，导入正确的模块名，以供使用  
+在转换的过程中，如果需要使用这些模块，那么会通过 `helper` 函数，将模块标识存入 `helpers` 集合中  
+在之后的 “生成” 阶段，会将 `helpers` 中存储的标识依次导入，以供使用后续使用  
 
 ```ts
 /**
@@ -271,13 +362,14 @@ helper(name) {
 }
 ```  
 
-`helperString` 不仅会存储模块标识，还会返回具体使用的模块名  
-注意在返回的模块名前加了 `_`，是因为在 “生成” 阶段中，会将 `helpers` 中的模块重新命名，例如  
-
+`helperString` 不仅会存储模块标识，还会返回使用的模块名  
+在 “生成” 阶段创建导入代码时，会将 `helpers` 中的模块重新命名，增加下划线 `_`，例如  
+  
 ```ts
 import { createVNode as _createVNode } from 'vue'
 ```  
 
+所以在使用的使用也就要使用 `_createVNode` 而非 `createVNode`  
 
 ```ts
 helperString(name) {
@@ -285,7 +377,7 @@ helperString(name) {
 }
 ```  
 
-### 替换节点 —— replaceNode  
+#### 替换节点 —— replaceNode  
 将当前正在执行钩子函数的节点替换为新的节点，修改 `currentNode` 和 `parent.children` 中的节点  
 
 ```ts
@@ -294,12 +386,17 @@ replaceNode(node) {
 }
 ```  
 
-### 删除节点 —— removeNode  
+**替换后的新节点还会执行已经执行过的钩子函数吗？**  
+会的，源码中做了处理，对于替换后的新节点，会再次对其进行从头到尾的转换过程，具体过程在之后会看到  
+其实，整个源码中只有 `v-if` 和 `v-for` 两个钩子函数会用到 `replaceNode`  
+
+#### 删除节点 —— removeNode  
+将当前正在转换的节点删除  
 
 ```ts
 /**
  * 删除节点
- * @param { ElementNode | undefined } node 需要删除的节点，不指定默认为当前节点
+ * @param { ElementNode | undefined } node 需要删除的节点，默认为当前正在转换的节点
  */
 removeNode(node) {
     // 1. 获取当前父节点的所有子节点
@@ -312,13 +409,16 @@ removeNode(node) {
             ? context.childIndex
             : -1
     
-    // 3. 如果 node 不存在，获取 node 存在，且和 currentNode 是同一个节点，则删除当前的 currentNode
+    // 3. 删除当前正在转换的节点，以下情况满足条件
+    //    1. 没有传递参数 node
+    //    2. 需要删除的节点 node 就是当前正在转换的 currentNode
     if (!node || node === context.currentNode) {
+        // 3.1 将当前正在转换的 node 置空，并执行删除的钩子函数
         context.currentNode = null
         context.onNodeRemoved()
     }
     // 4. 能进入 else 的唯一入口就是，删除的 node 并不是 currentNode
-    //    如果删除的是当前节点之后的节点，由于后面的节点还没有处理，所以不会影响，什么也不会做
+    //    如果删除的是当前节点之后的节点，由于后面的节点还没有处理，所以不会影响，直接删除即可
     //    如果删除的是当前节点之前的节点，那么会将 childIndex - 1，currentNode 的指向并不会改变
     else {
         if (context.childIndex > removalIndex) {
@@ -327,41 +427,9 @@ removeNode(node) {
         }
     }
     
-    // 5. 从 parent.children 删除指定节点
+    // 5. 从子节点列表中删除指定节点
     context.parent!.children.splice(removalIndex, 1)
 }
 ```  
 
 
-
-## 转换入口 —— transform  
-
-```ts
-export function transform(root: RootNode, options: TransformOptions) {
-    // 1. 创建作用域对象
-    const context = createTransformContext(root, options)
-    // 2. 从根节点开始遍历执行所有钩子函数
-    traverseNode(root, context)
-
-    // 3. 
-    if (options.hoistStatic) {
-        hoistStatic(root, context)
-    }
-    // 4. 
-    if (!options.ssr) {
-        createRootCodegen(root, context)
-    }
-    // 5. 将作用域中的部分内容挂载在根节点上
-    root.helpers = [...context.helpers]         // 帮助模块集合
-    root.components = [...context.components]   // 自定义组件集合
-    root.directives = [...context.directives]   // 自定义指令集合
-    root.imports = [...context.imports]         //
-    root.hoists = context.hoists                // 静态节点集合
-    root.temps = context.temps                  // 临时变量个数
-    root.cached = context.cached                // 
-}
-```  
-
-### 节点生成器
-
-### 补充根节点结构  

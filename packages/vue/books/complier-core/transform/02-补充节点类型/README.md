@@ -26,23 +26,31 @@ export const enum NodeTypes {
     DIRECTIVE,
     
     // containers
-    COMPOUND_EXPRESSION,        // 合成表达式
+    COMPOUND_EXPRESSION,        // 复合表达式
     IF,                         // v-if 节点
     IF_BRANCH,                  // v-if 的分支节点
     FOR,                        // v-for 节点
-    TEXT_CALL,        
+    TEXT_CALL,                  // 通过 createTextVNode 创建文本 vnode 的节点
               
     // codegen
-    VNODE_CALL,
+    VNODE_CALL,                 // 通过 createVNode 创建 vnode 的节点
     
     // 下面几种类型对应 JS 中的数据类型
     JS_CALL_EXPRESSION,         // 函数调用节点
     JS_OBJECT_EXPRESSION,       // 对象节点
     JS_PROPERTY,                // 对象属性节点
     JS_ARRAY_EXPRESSION,        // 数组节点
-    JS_FUNCTION_EXPRESSION,     // 函数定义节点
-    JS_CONDITIONAL_EXPRESSION,  
-    JS_CACHE_EXPRESSION,
+    JS_FUNCTION_EXPRESSION,     // 函数节点
+    JS_CONDITIONAL_EXPRESSION,  // 条件语句节点
+    JS_CACHE_EXPRESSION,        // 缓存语句节点
+
+    // ssr codegen
+    JS_BLOCK_STATEMENT,
+    JS_TEMPLATE_LITERAL,
+    JS_IF_STATEMENT,
+    JS_ASSIGNMENT_EXPRESSION,
+    JS_SEQUENCE_EXPRESSION,
+    JS_RETURN_STATEMENT
 }
 ```  
 
@@ -57,16 +65,10 @@ export interface SimpleExpressionNode extends Node {
     type: NodeTypes.SIMPLE_EXPRESSION   // 类型为节点表达式
     content: string                     // 表达式的值
     isStatic: boolean                   // 值是否是静态的
-    constType: ConstantTypes            // 常量类型
-    /**
-    * Indicates this is an identifier for a hoist vnode call and points to the
-    * hoisted node.
-    */
+    constType: ConstantTypes            // TODO: 常量类型
+    // 说明表达式存在需要静态提升的节点，具体用法可以在 静态提升 章节中看到
     hoisted?: JSChildNode
-    /**
-    * an expression parsed as the params of a function will track
-    * the identifiers declared inside the function body.
-    */
+    // TODO: 具体用法
     identifiers?: string[]
 }
 ```  
@@ -91,7 +93,15 @@ export function createSimpleExpression(
 ```  
 
 ### 创建复合表达式 —— createCompoundExpression  
-复合表达式是将连续的文本、插值、简单表达式连接起来形成的，在之后会看到具体的使用，先来看它结构  
+复合表达式是将连续的文本、插值、简单表达式连接起来形成的，例如  
+
+```html
+<div>hello {{ name }}</div>
+```  
+
+`div` 的子元素在 “转换” 完成后，会变成一个节点，就是 复合表达式节点，由 `hello` 和 `{{ name }}` 组成  
+
+再来看它的结构  
 
 ```ts
 export interface CompoundExpressionNode extends Node {

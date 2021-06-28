@@ -1,19 +1,23 @@
 <!-- TOC -->
 
-- [v-if 节点](#v-if-节点)
-- [if 分支节点](#if-分支节点)
-- [if 条件表达式节点](#if-条件表达式节点)
+- [v-if 相关节点](#v-if-相关节点)
+    - [v-if 节点](#v-if-节点)
+    - [if 分支节点](#if-分支节点)
+    - [if 条件表达式节点](#if-条件表达式节点)
 - [v-if 转换函数 —— transformIf](#v-if-转换函数--transformif)
-- [创建指令转换函数 —— createStructuralDirectiveTransform](#创建指令转换函数--createstructuraldirectivetransform)
-- [转换函数 —— processIf](#转换函数--processif)
-- [创建生成器回调 —— processCodegen](#创建生成器回调--processcodegen)
-- [获取最近的 if 表达式 —— getParentCondition](#获取最近的-if-表达式--getparentcondition)
-- [根据分支创建生成器节点 —— createCodegenNodeForBranch](#根据分支创建生成器节点--createcodegennodeforbranch)
+    - [处理 v-if —— processIf](#处理-v-if--processif)
+    - [创建生成器回调 —— processCodegen](#创建生成器回调--processcodegen)
+- [获取上一个分支的表达式节点 —— getParentCondition](#获取上一个分支的表达式节点--getparentcondition)
+- [创建分支的生成器 —— createCodegenNodeForBranch](#创建分支的生成器--createcodegennodeforbranch)
 - [创建子节点的生成器节点 —— createChildrenCodegenNode](#创建子节点的生成器节点--createchildrencodegennode)
 
 <!-- /TOC -->
 
-## v-if 节点  
+****这篇主要介绍 `v-if` 指令的转换过程****  
+
+## v-if 相关节点  
+
+### v-if 节点  
 先来看 `if` 节点的结构  
 
 ```ts
@@ -23,16 +27,17 @@ export interface IfNode extends Node {
     // 节点分支集合
     branches: IfBranchNode[]
     // if 生成器节点
-    codegenNode?: IfConditionalExpression | CacheExpression // <div v-if v-once>
+    codegenNode?:
+        IfConditionalExpression |   // if 表达式节点 <div v-if />
+        CacheExpression             // 缓存表达式节点 <div v-if v-once>
 }
 ```
 
-这个 `IfNode` 类型，实际并不代表 `v-if`，而是代表一整套的 `v-if`、`v-else-if` 和 `v-else`  
-
-上面这三种指令就属于 `if` 分支节点，即 `IfBranchNode`，它们作为 `branches` 属性存在于 `IfNode` 中  
+这个 `IfNode` 类型，实际不是指具体的 `v-if` 指令，而是将 `v-if`、`v-else-if` 和 `v-else` 三种指令合成的一种节点  
+这三种指令其实属于 `if` 分支节点，即 `IfBranchNode`，它们作为 `branches` 存储于 `IfNode` 中  
 `IfNode.branches` 最少也会有一个元素，就是 `v-if` 分支  
 
-## if 分支节点  
+### if 分支节点  
 先来看分支节点的结构  
 
 ```ts
@@ -40,9 +45,9 @@ export interface IfBranchNode extends Node {
     type: NodeTypes.IF_BRANCH               // 节点类型为 if 分支
     condition: ExpressionNode | undefined   // 分支的条件，v-else 不存在条件
     children: TemplateChildNode[]           // 分支子节点
-    userKey?: AttributeNode | DirectiveNode
+    userKey?: AttributeNode | DirectiveNode // 每个分支都具有 key 属性
 }
-```  
+```
 
 其中 `children` 所指的就是分支所在的节点，而且一定是数组  
 
@@ -84,12 +89,14 @@ export interface IfBranchNode extends Node {
 ```ts
 function createIfBranch(node: ElementNode, dir: DirectiveNode): IfBranchNode {
     return {
-        type: NodeTypes.IF_BRANCH,  // 节点类型为 if 分支
-        loc: node.loc,              // 定位为节点的定位
-        // 条件，v-else 为 undefined，v-if、v-else-if 为指令节点的值
+        // 节点类型为 if 分支
+        type: NodeTypes.IF_BRANCH,
+        // 定位为节点的定位
+        loc: node.loc,
+        // 条件，v-else 为 undefined，v-if、v-else-if 为指令的值
         condition: dir.name === 'else' ? undefined : dir.exp,
         // 子节点
-        // 不带有 v-foo 的 template，就是 template 的子元素
+        // 不带有 v-for 的 template，就是 template 的子元素
         // 剩余情况都是元素自身组成的数组
         children:
             node.tagType === ElementTypes.TEMPLATE && !findDir(node, 'for')
@@ -98,7 +105,7 @@ function createIfBranch(node: ElementNode, dir: DirectiveNode): IfBranchNode {
         userKey: findProp(node, `key`)
     }
 }
-```  
+```
 
 可以看到，针对于没有 `v-for` 的 `template` 元素，相当于跳过了 `template`，直接获取了子元素，例如  
 
@@ -109,7 +116,7 @@ function createIfBranch(node: ElementNode, dir: DirectiveNode): IfBranchNode {
 </template>
 ```
 
-会被转换为  
+会被转换为(伪代码)  
 
 ```ts
 {
@@ -127,7 +134,30 @@ function createIfBranch(node: ElementNode, dir: DirectiveNode): IfBranchNode {
 }
 ```  
 
-## if 条件表达式节点  
+而对于 `template` 上存在 `v-for` 的节点来说，会保留 `template`，例如  
+
+```html
+<template v-if="a" v-for="item in items">
+    <div>name</div>
+</template>
+```  
+
+```ts
+{
+    type: NodeTypes.IF,
+    branches: [
+        {
+            type: NodeTypes.IF_BRANCH,
+            condition: 'a',
+            children: [
+                '<template v-for="item in items"><div>name</div></template>',
+            ]
+        },
+    ]
+}
+```   
+
+### if 条件表达式节点  
 可以看到，`if` 节点的生成器可能是 `if` 条件表达式 —— `IfConditionalExpression`，这个节点能描述 `if..else if..else` 这种形式，先来看它的结构  
 
 ```ts
@@ -137,52 +167,52 @@ export interface IfConditionalExpression extends ConditionalExpression {
     // 不满足条件的节点
     alternate: BlockCodegenNode | IfConditionalExpression
 }
-```  
+```
 
-我们先来看单独的 条件表达式 的结构  
+其中 `BlockCodegenNode` 是 `block` 生成器，说明它可能会开启新的 `block`，它的类型如下  
 
 ```ts
-export interface ConditionalExpression extends Node {
-    type: NodeTypes.JS_CONDITIONAL_EXPRESSION   // 节点类型
-    test: JSChildNode                           // 条件语句
-    consequent: JSChildNode                     // 满足条件的节点
-    alternate: JSChildNode                      // 不满足条件的节点
-    newline: boolean
-}
-```  
+export type BlockCodegenNode = 
+    VNodeCall |     // <div v-if />
+    RenderSlotCall  // <slot v-if />
+```
 
-再来看 `if` 条件表达式中，不满足条件的 `alternate` 可能还是一个 `IfConditionalExpression`，这里为什么会出现嵌套关系？
+当在 `slot` 上使用 `v-if` 时，那么 `consequent` 就指向 `RenderSlotCall`  
+
+再来看不满足条件的 `alternate` 可能还是一个 `IfConditionalExpression`，这里为什么会出现嵌套关系？
 实际就是把 `else..if` 又当做一个 `if` 看待，这样就能描述多个 `else..if` 了  
 
 例如有下面代码  
 
-```ts
-if (a) { console.log(a) }
-else if (b) { console.log(b) }
-else if (c) { console.log(c) }
-else { console.log(d) }
+```html
+<div v-if="a">a</div>
+<div v-else-if="b">b</div>
+<div v-else-if="c">c</div>
+<div v-else>d</div>
+```
 
-// 用下面的结构就可以描述上面的 if 表达式
+用下面的结构就可以描述上面的 `if` 表达式
+```ts
 {
     type: NodeTypes.JS_CONDITIONAL_EXPRESSION,
     test: 'a',
-    consequent: 'console.log(a)',
+    consequent: '<div>a</div>',
     alternate: {
         type: NodeTypes.JS_CONDITIONAL_EXPRESSION,
         test: 'b',
-        consequent: 'console.log(b)',
-        alternate: alternate: {
+        consequent: '<div>b</div>',
+        alternate: {
             type: NodeTypes.JS_CONDITIONAL_EXPRESSION,
             test: 'c',
-            consequent: 'console.log(c)',
-            alternate: 'console.log(d)'
+            consequent: '<div>c</div>',
+            alternate: '<div>d</div>'
         }
     }
 }
-``` 
+```  
 
 ## v-if 转换函数 —— transformIf  
-`transformIf` 的实现很简单，只是一个封装函数  
+`transformIf` 的实现很简单，通过 [createStructuralDirectiveTransform]() 生成  
 
 ```ts
 export const transformIf = createStructuralDirectiveTransform(
@@ -195,75 +225,21 @@ export const transformIf = createStructuralDirectiveTransform(
 )
 ```
 
-`transformIf` 最终会被用在 `transform.options.nodeTransforms` 数组中，所以 `createStructuralDirectiveTransform` 的返回值类型必须是 `NodeTransform`  
-
-接下来看看这个函数具体做了什么  
-
-## 创建指令转换函数 —— createStructuralDirectiveTransform  
-这个函数会创建一个指令转换函数，它只对匹配的指令调用回调 `fn`，并保存转换完成的回调  
-
-```ts
-export function createStructuralDirectiveTransform(
-    name: string | RegExp,              // 需要处理的指令名
-    fn: StructuralDirectiveTransform    // 具体的处理方法
-): NodeTransform {
-    // 匹配函数
-    const matches = isString(name)
-        ? (n: string) => n === name
-        : (n: string) => name.test(n)
-
-    // 返回转换函数，被 traverseNode 调用
-    return (node, context) => {
-        // 1. 过滤非元素节点
-        if (node.type === NodeTypes.ELEMENT) {
-            const { props } = node
-            // 2. 不会处理带有 v-slot 的 template 元素，它会被 v-slot 的转换函数处理
-            if (node.tagType === ElementTypes.TEMPLATE && props.some(isVSlot)) {
-                return
-            }
-            
-            // 3. 转换完成回调列表，当 node 的所有子元素被转换完成后，会从后往前依次执行
-            const exitFns = []
-            
-            // 4. 遍历所有的 props
-            for (let i = 0; i < props.length; i++) {
-                const prop = props[i]
-                // 4.1 过滤掉不是指令的节点，以及不满足指令名称的节点
-                if (prop.type === NodeTypes.DIRECTIVE && matches(prop.name)) {
-                    // 4.1.1 将指令从节点中移除
-                    props.splice(i, 1)
-                    i--
-                    // 4.1.2 对指令执行回调
-                    const onExit = fn(node, prop, context)
-                    // 4.1.3 保存转换完成的回调
-                    if (onExit) exitFns.push(onExit)
-                }
-            }
-
-            // 5. 转换完成回调列表
-            return exitFns
-        }
-    }
-}
-```
-
-这个函数会被用在很多指令，算是一个创建转换的标准函数  
-
-## 转换函数 —— processIf  
+### 处理 v-if —— processIf  
 这个函数是转换 `v-if` 的真正函数，被 [transformIf](#v-if-转换函数--transformif) 调用
 
 ```ts
 export function processIf(
-    node: ElementNode,          // 元素节点
+    node: ElementNode,          // 带有 v-if 的元素节点
     dir: DirectiveNode,         // 指令节点
-    context: TransformContext,  // 作用域对象
+    context: TransformContext,  // 作用域
     processCodegen?: (          // 创建生成器的回调
         node: IfNode,           // if 节点
         branch: IfBranchNode,   // 分支节点
         isRoot: boolean         // 是否是 v-if 分支，false 代表是 v-else-if 或 v-else
     ) => (() => void) | undefined
 ) {
-    // 1. 检测指令的合法性：如果不是 v-else，并且也没有有效值
+    // 1. 检测指令的合法性：v-if 或 v-else-if 必须存在有效的值，如果没有则抛错，并且使用 true 作为值
     if (
         dir.name !== 'else' &&
         (!dir.exp || !(dir.exp as SimpleExpressionNode).content.trim())
@@ -272,11 +248,11 @@ export function processIf(
         context.onError(
             createCompilerError(ErrorCodes.X_V_IF_NO_EXPRESSION, dir.loc)
         )
-        // TODO: 将值改写为 true 表达式，注意这里并不是静态表达式
+        // 和解析的指令值结果保持一致，均使用动态值
         dir.exp = createSimpleExpression(`true`, false, loc)
     }
 
-    // 2. 处理指令值是复杂表达式的情况，由 processExpression 完成复杂表达式的转换，并更新到指令值
+    // 2. 对指令值增加数据来源前缀，这一步完成指令值可能是 SimpleExpressionNode 也可能是 CompoundExpressionNode
     //    例如 v-if="a + b"
     if (!__BROWSER__ && context.prefixIdentifiers && dir.exp) {
         dir.exp = processExpression(dir.exp as SimpleExpressionNode, context)
@@ -293,21 +269,22 @@ export function processIf(
             branches: [branch]
         }
         // 3.3 将当前节点替换为 if 节点，替换后成功后，在 traverseNode 中，会对每个分支节点进行遍历
+        //     注意，替换后 parent 的 children 就是 ifNode, others...
         context.replaceNode(ifNode)
-        // 3.4 执行节点生成器回调，并退出回调返回的函数，最终记录在转换完成的回调中
+        // 3.4 创建生成器，并将 processCodegen 的返回值作为 v-if 钩子函数的 退出函数
         if (processCodegen) {
             return processCodegen(ifNode, branch, true)
         }
     }
     // 4. 处理 v-else-if、v-else
     else {
-        // 4.1 获取所有子节点
+        // 4.1 获取所有子节点，siblings 中至少有一个 ifNode 节点
         const siblings = context.parent!.children
         // 4.2 存放注释的列表
         const comments = []
-        // 4.3 获取当前节点的索引位置
+        // 4.3 获取当前节点的索引
         let i = siblings.indexOf(node)
-        // 4.4 从当前节点 node 开始向前遍历
+        // 4.4 从当前节点向前遍历
         while (i-- >= -1) {
             // 4.4.1 获取前一个节点
             const sibling = siblings[i]
@@ -318,7 +295,7 @@ export function processIf(
                 continue
             }
 
-            // 4.4.3 如果前一个节点是空白的文本节点，将文本移除
+            // 4.4.3 如果前一个节点是空白的文本节点，直接将文本移除
             if (
                 sibling &&
                 sibling.type === NodeTypes.TEXT &&
@@ -341,7 +318,7 @@ export function processIf(
 
                 // 4.4.8 将当前分支存入 if 节点中
                 sibling.branches.push(branch)
-                // 4.4.9 执行节点生成器回调
+                // 4.4.9 为当前分支创建生成器
                 const onExit = processCodegen && processCodegen(sibling, branch, false)
                 // 4.4.10 新创建的分支节点还没有遍历，所以需要重新遍历
                 traverseNode(branch, context)
@@ -362,16 +339,23 @@ export function processIf(
 }
 ```
 
+在 4.4 中，可以看到，创建分支节点后，会手动调用一次 `traverseNode` 对分支节点进行转换，为什么这里需要手动调用？为什么在步骤 3 中不需要？  
+
+1. 首先在步骤 3 中，将当前节点替换成了分支节点，那么分支节点会在 [traversenode]() 中进行转换  
+
+2. 但在步骤 4 中，首先会将当前节点移除，还记得在 [traversenode]() 对删除节点会如何处理吗？会立即停止遍历钩子函数  
+    也就是说，当前节点不会继续向下进行转换了，所以这里要手动对分支节点调用一次 `traverseNode`，从而对分支下的所有子节点进行转换  
+
 接下来看生成器节点的创建  
 
-## 创建生成器回调 —— processCodegen  
+### 创建生成器回调 —— processCodegen  
 ```ts
 return processIf(node, dir, context, (ifNode, branch, isRoot) => {
     // 1. 获取子节点集合
     const siblings = context.parent!.children
-    // 2. 获取当前 if 节点所在的位置
+    // 2. 获取当前 if 节点在父节点中的索引
     let i = siblings.indexOf(ifNode)
-    // 3. 分支的 key，初始为前面所有的 if 节点分支数之和
+    // 3. 创建分支的 key，初始为前面所有的 v-if、v-else-if、v-else 分支数之和
     let key = 0
     while (i-- >= 0) {
         const sibling = siblings[i]
@@ -382,7 +366,7 @@ return processIf(node, dir, context, (ifNode, branch, isRoot) => {
 
     // 4. 退出函数，当所有子节点都完成转换时再调用
     return () => {
-        // 4.1 处理 v-if 节点，创建生成器节点，并挂载在 if 节点上
+        // 4.1 创建 v-if 分支的生成器，挂载在 if 节点上
         if (isRoot) {
             ifNode.codegenNode = createCodegenNodeForBranch(
                 branch,
@@ -390,13 +374,15 @@ return processIf(node, dir, context, (ifNode, branch, isRoot) => {
                 context
             ) as IfConditionalExpression
         }
-        // 4.2 处理 v-else-if、v-else 节点
+        // 4.2 创建 v-else-if、v-else 的生成器
         else {
-            // 4.2.1 首先获取父级条件表达式语句
+            // 4.2.1 首先获取上一个条件表达式
             const parentCondition = getParentCondition(ifNode.codegenNode!)
-            // 4.2.2 修改 alternate 分支
+            // 4.2.2 修改上一个分支的 alternate，指向当前分支的生成器
             parentCondition.alternate = createCodegenNodeForBranch(
                 branch,
+                // 前面所有 if 分支的总和 + 当前 if 分支的长度-1
+                // 此时，当前 if 分支已经是包含最新的分支了
                 key + ifNode.branches.length - 1,
                 context
             )
@@ -405,58 +391,53 @@ return processIf(node, dir, context, (ifNode, branch, isRoot) => {
 })
 ```
 
-1. 可以看到，源码中对每一个分支都创建了 `key`，并且在同一层子节点中，`key` 是依次递增的，无论有多少个 `if`，例如  
+1. 可以看到，源码中对每一个分支都创建了 `key`，并且在同一层子节点中，`key` 是依次递增的，无论有多少个 `v-if`，例如  
 
     ```html
-    <div v-if="a">a</div>
-    <div v-else-if="b">b</div>
-    <div v-else="b">c</div>
-    <div v-if="d">d</div>
+    <div>
+        <div v-if="a">a</div>
+        <div v-else-if="b">b</div>
+        <div v-else="b">c</div>
+        <div v-if="d">d</div>
+        <div v-else-if="e">e</div>
+    </div>
     ```
 
-    上面 4 个分支的 `key` 依次为 0，1，2，3  
+    上面 4 个分支的 `key` 依次为 0，1，2，3，4  
 
-2. 在 [上面](#if-条件表达式节点) 介绍过 `ifNode` 的生成器类型，从 4.1 可以看出的确是 `IfConditionalExpression`  
-    而之前也说过，`if` 条件表达式会出现嵌套情况，就是发生在 4.2.2 的
-   但在这之前会先获取 “最近的 `if` 条件表达式”(通过 4.2.1)，因为嵌套的 `v-else-if`、`v-else` 需要修改最近的 `alternate`
-   参考下面的示例
+2. 接下来看看 4.2 中是如何生成 `v-else-if` 和 `v-else` 的生成器的  
+    之前说过，存在多个 `v-else-if` 的话，会形成嵌套的结构，对于每个 `v-else-if`，实际是按照 `v-if` 去处理的  
+    也就是说，`v-else-if` 分支的生成器也是 条件表达式(和 `v-if` 一样)，但不同的是，`v-else-if` 的生成器会作为上一个分支的 `alternate`  
+    上一个分支可能是 `v-if`，也有可能是 `v-else-if`  
+    
+    这样，开始的 `v-if` 生成器是一个 条件表达式，满足条件是具体节点的生成器，不满足条件是下一个 `v-else-if` 的生成器，也是 条件表达式，满足条件是具体节点的生成器，不满足条件是下一个 `v-else-if` 的生成器，一直重复下去  
 
+    所以在 4.2 中首先要获取上一个分支的 条件表达式，然后再为当前分支创建生成器，并作为上一个分支的 `alternate`  
+
+    下面这个示例形成的过程如下图  
+    
     ```html
     <div v-if="a">a</div>
     <div v-else-if="b">b</div>
     <div v-else-if="c">c</div>
-    <div v-else>d</div>
-    ```  
-    转换结果(`b` 修改的还是 `a` 产生的 “条件表达式”，而 `c` 修改的是最近的，即 `b` 产生的 “条件表达式”)  
-    ```ts
-    {
-        type: NodeTypes.JS_CONDITIONAL_EXPRESSION,
-        test: 'a',
-        consequent: '<div>a</div>',
-        altername: {
-            type: NodeTypes.JS_CONDITIONAL_EXPRESSION,
-            test: 'b',
-            consequent: '<div>b</div>',
-            altername: {
-                type: NodeTypes.JS_CONDITIONAL_EXPRESSION,
-                test: 'c',
-                consequent: '<div>c</div>',
-                altername: '<div>d</div>'
-            }
-        }
-    }
-    ```  
+    ```
 
-接下来先看如果获取 “最近的 `if` 表达式”  
+    <img src="./01.png" />  
 
-## 获取最近的 if 表达式 —— getParentCondition  
-获取最近的条件表达式节点  
+## 获取上一个分支的表达式节点 —— getParentCondition  
+经过上面的内容，已经了解了什么是上一个分支的表达式节点以及为什么需要它，接下来具体实现  
 
 ```ts
 function getParentCondition(
-    node: IfConditionalExpression | CacheExpression // 这个节点肯定是 if 节点上的生成器节点，即 v-if 产生的 条件表达式
+    node: IfConditionalExpression | CacheExpression // if 生成器
 ): IfConditionalExpression {
+    // 每次都会从 if 的生成器开始查找
+    
     while (true) {
+        // 1. 处理 if 生成器是条件表达式
+        //    检测不满足条件的 alternate 是否也是条件表达式
+        //      如果是，则说明已经存在 v-else-if 了，则继续检测 v-else-if 的生成器
+        //      如果不是，则说明 node 就是最新分支的表达式
         if (node.type === NodeTypes.JS_CONDITIONAL_EXPRESSION) {
             if (node.alternate.type === NodeTypes.JS_CONDITIONAL_EXPRESSION) {
                 // 存在嵌套，修改 node 为嵌套的 条件表达式，继续查找，直到没有嵌套为止
@@ -465,17 +446,21 @@ function getParentCondition(
                 // 没有嵌套，直接返回 v-if 产生的 条件表达式
                 return node
             }
-        } else if (node.type === NodeTypes.JS_CACHE_EXPRESSION) {
+        }
+        // 2. TODO: 处理 if 生成器是缓存表达式
+        else if (node.type === NodeTypes.JS_CACHE_EXPRESSION) {
             node = node.value as IfConditionalExpression
         }
     }
 }
-```  
+```
 
-## 根据分支创建生成器节点 —— createCodegenNodeForBranch  
-这个函数用来创建每个分支的生成器节点  
-对于有条件的分支(`v-if`、`v-else-if`)来说，生成器节点是一个 `if` 条件表达式  
-至于没有条件的分支(`v-else`)，它的生成器节点就是 `v-else` 所在节点的生成器节点   
+## 创建分支的生成器 —— createCodegenNodeForBranch  
+每个分支都会对应一个生成器    
+* 对于有条件的分支，它的生成器是 ”条件表达式“  
+  其中满足条件指向的是子节点的生成器  
+  不满足条件指向的是注释节点生成器  
+* 对于没有条件的分支来说，它的生成器就是创建具体节点的生成器  
 
 接下来看创建分支生成器节点的具体实现  
 
@@ -485,21 +470,21 @@ function createCodegenNodeForBranch(
     keyIndex: number,         // 分支 key
     context: TransformContext // 作用域
 ): IfConditionalExpression | BlockCodegenNode {
-    // 处理 v-if、v-else-if
+    // 1. 处理 v-if、v-else-if
     if (branch.condition) {
-        // 创建条件表达式节点
+        // 1.1 创建条件表达式节点
         return createConditionalExpression(
             branch.condition,
-            // 创建满足条件的节点
+            // 创建满足条件的节点生成器
             createChildrenCodegenNode(branch, keyIndex, context),
-            // 创建不满足条件的节点，v-if 和 v-else-if 不满足条件的节点都是注释
+            // 创建不满足条件的节点生成器，v-if 和 v-else-if 不满足条件的节点都是注释
             createCallExpression(context.helper(CREATE_COMMENT), [
                 __DEV__ ? '"v-if"' : '""',
                 'true'
             ])
         ) as IfConditionalExpression
     }
-    // 处理 v-else
+    // 2. 处理 v-else
     else {
         return createChildrenCodegenNode(branch, keyIndex, context)
     }
@@ -507,7 +492,7 @@ function createCodegenNodeForBranch(
 ```
 
 ## 创建子节点的生成器节点 —— createChildrenCodegenNode  
-这个函数会创建不同分支的生成器节点  
+每个分支下存在具体渲染的子节点 `children`，这个函数就是创建 `children` 的生成器  
 
 ```ts
 function createChildrenCodegenNode(
@@ -524,31 +509,32 @@ function createChildrenCodegenNode(
             `${keyIndex}`,
             false,
             locStub,
-            // TODO: 为什么是 CAN_HOIST
             ConstantTypes.CAN_HOIST
         )
     )
 
-    // 2. 获取第一个子节点
+    // 2. 获取子节点集合，以及第一个子节点
     const { children } = branch
     const firstChild = children[0]
-    // 3. 检测是否需要包裹 Fragment 节点，满足一下任意条件就需要包裹
-    //    a. 有多个子节点
-    //    b. 第一个节点不是元素
+
+    // 3. 检测是否需要包裹 Fragment 节点，满足以下任意条件就需要包裹
+    //    a. 有多个子节点，<template v-if />
+    //    b. 第一个节点不是元素，<template v-if>text</template>
     const needFragmentWrapper =
         children.length !== 1 ||
         firstChild.type !== NodeTypes.ELEMENT
 
     // 4. 需要 Fragment
     if (needFragmentWrapper) {
-        // 4.1
+        // 4.1 处理 <template v-if><div v-for /></template> 的情况
         if (children.length === 1 && firstChild.type === NodeTypes.FOR) {
-            // optimize away nested fragments when child is a ForNode
+            // 直接将 v-for 的生成器作为分支的生成器，并注入 key 属性
             const vnodeCall = firstChild.codegenNode!
             injectProp(vnodeCall, keyProperty, context)
             return vnodeCall
         }
-        // 4.2 存在多个子节点，创建 Fragment 的生成器节点
+        // 4.2 处理多个子节点，或者第一个子节点不是 v-for 的情况
+        //     创建 Fragment 的生成器作为分支的生成器
         else {
             return createVNodeCall(
                 context,
@@ -563,75 +549,31 @@ function createChildrenCodegenNode(
                     : ``),
                 undefined,
                 undefined,
+                // 强制开启 block
                 true,
                 false,
                 branch.loc
             )
         }
     }
-    // 5. 不需要 Fragment
+    // 5. 不需要 Fragment，说明也只有一个子节点，且不是文本
     else {
-        // 5.1 获取第一个子元素的生成器节点，此时所有子元素都已经转换完成，所以肯定会存在生成器节点
+        // 5.1 直接获取子节点的生成器，作为当前分支的生成器
         const vnodeCall = (firstChild as ElementNode).codegenNode as BlockCodegenNode
-        // 5.2 如果是生成器是节点，则标识需要开启 Block
+        // 5.2 如果是节点的生成器，则强制开始 block
         if (vnodeCall.type === NodeTypes.VNODE_CALL) {
             vnodeCall.isBlock = true
             helper(OPEN_BLOCK)
             helper(CREATE_BLOCK)
         }
-        // 5.3 注入 if 分支产生的 key
+        // 5.3 注入 if 分支产生的 key 到生成器中
         injectProp(vnodeCall, keyProperty, context)
-        // 5.4 返回第一个子节点的生成器节点
+        // 5.4 返回生成器
         return vnodeCall
     }
 }
-```  
+```
 
-1. 对于生成器是节点，必须开启 `block`，例如  
+注意：  
 
-```html
-<div v-if="a">a</div>
-```  
-
-会被转换为    
-
-```ts
-(_ctx.a)
-    ? (_openBlock(), _createBlock("div", { key: 0 }, "a"))
-    : (_openBlock(), _createBlock("div", { key: 1 }, "b"))
-```  
-
-可以看到，每个分支都会创建一个 `block`  
-
-2. 在 [创建 if 分支节点](#创建分支节点--createifbranch) 中我们知道，分支的子元素只有在 `<template />` 这种情况下，才会有多个  
-   所以如果是通过多个子元素来包裹 `Fragment` 也只有这一种情况  
-
-    ```html
-    <template v-if="a">
-        <span>1</span>
-        <span>2</span>
-    </template>
-    ```  
-    被转换为  
-    ```ts
-    (_ctx.a)
-        ? (_openBlock(), _createBlock(_Fragment, { key: 0 }, [
-            _createVNode("span", null, "1"),
-            _createVNode("span", null, "2")
-        ], 64 /* STABLE_FRAGMENT */))
-        : _createCommentVNode("v-if", true)
-    ```  
-
-3. 对于生成器不是节点类型来说，是不需要开启 `block` 的，例如 `slot`，如下  
-
-```html
-<slot v-if="b" />
-```  
-
-被转换为  
-
-```ts
-(_ctx.b)
-    ? _renderSlot(_ctx.$slots, "default", { key: 0 })
-    : _createCommentVNode("v-if", true)
-```  
+1. 在创建 `key` 的属性节点是，标明常量类型属于 `ConstantTypes.CAN_HOIST`，也就是说这个 `key` 是可能被静态提升的  

@@ -447,13 +447,25 @@ function getParentCondition(
                 return node
             }
         }
-        // 2. TODO: 处理 if 生成器是缓存表达式
+        // 2. 处理 if 生成器是缓存表达式
         else if (node.type === NodeTypes.JS_CACHE_EXPRESSION) {
             node = node.value as IfConditionalExpression
         }
     }
 }
-```
+```  
+
+注意：  
+第 2 步中处理了 `if` 的生成器是缓存的情况，什么时候会发生这种情况呢？  
+
+```html
+<div v-if="a" v-once></div>
+```  
+
+当同时带有 `v-if` 以及 `v-once` 时，`if` 的生成器就不再是原本的 条件表达式 了，而是缓存节点  
+缓存节点其中的 `value` 指向原本的 条件表达式(具体内容可以参考 [v-once]())  
+
+此时会获取到缓存中的 条件表达式，再次对其进行第 1 步的操作，从而获取上一个分支的条件表达式  
 
 ## 创建分支的生成器 —— createCodegenNodeForBranch  
 每个分支都会对应一个生成器    

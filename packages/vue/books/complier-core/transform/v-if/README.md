@@ -13,7 +13,7 @@
 
 <!-- /TOC -->
 
-****这篇主要介绍 `v-if` 指令的转换过程****  
+**这篇开始详细介绍 `v-for` 指令的相关内容，它属于结构指令，所以最终会被放进作用域中的 `nodeTransforms` 而不是 `directiveTransforms`**  
 
 ## v-if 相关节点  
 

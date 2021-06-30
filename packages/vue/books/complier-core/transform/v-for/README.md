@@ -1,7 +1,8 @@
 <!-- TOC -->
 
 - [解析 v-for 的值](#解析-v-for-的值)
-- [处理 v-for 指令](#处理-v-for-指令)
+- [v-for 转换函数 —— transformFor](#v-for-转换函数--transformfor)
+- [处理 v-for 指令 —— processFor](#处理-v-for-指令--processfor)
 - [创建生成器 —— processCodegen](#创建生成器--processcodegen)
     - [创建生成器的退出函数](#创建生成器的退出函数)
     - [创建渲染函数的参数 —— createForLoopParams](#创建渲染函数的参数--createforloopparams)
@@ -55,6 +56,13 @@ export interface ForParseResult {
 接下来看看具体的解析过程  
 
 ```ts
+// 匹配 v-for 左侧和右侧的值
+const forAliasRE = /([\s\S]*?)\s+(?:in|of)\s+([\s\S]*)/
+// 匹配 v-for 左侧中的 key 和索引
+const forIteratorRE = /,([^,\}\]]*)(?:,([^,\}\]]*))?$/
+// 匹配 v-for 左侧值中的等号，即 v-for="(item, key, index) in items"
+const stripParensRE = /^\(|\)$/g
+
 export function parseForExpression(
     input: SimpleExpressionNode,  // v-for 指令值，此时 v-for 的值还没有经过任何处理，所以是一个简单表达式
     context: TransformContext     // 作用域
@@ -89,7 +97,7 @@ export function parseForExpression(
     }
 
     // 5. 获取有效内容，这个变量最终会指向项目，由于现在还不知道是否存在 key 和索引，所以先存储为有效内容
-    //    如果存在 key 或索引，就会修改，如果不存在那么现在获取到的就是项目
+    //    如果存在 key 或索引，后面就会修改，如果不存在那么现在获取到的就是项目
     let valueContent = LHS.trim()
         .replace(stripParensRE, '')
         .trim()
@@ -153,7 +161,22 @@ export function parseForExpression(
 }
 ```  
 
-## 处理 v-for 指令  
+## v-for 转换函数 —— transformFor  
+`transformFor` 的实现很简单，通过 [createStructuralDirectiveTransform]() 生成  
+
+```ts
+export const transformFor = createStructuralDirectiveTransform(
+    'for',
+    (node, dir, context) => {
+        const { helper } = context
+        return processFor(node, dir, context, forNode => {
+            /* ... */
+        })
+    }
+)
+```    
+
+## 处理 v-for 指令 —— processFor  
 这个函数可以理解为处理 `v-for` 指令的入口函数，其中会创建 `v-for` 的节点，先来看看 `v-for` 的节点结构  
 
 ```ts
@@ -174,7 +197,7 @@ export interface ForNode extends Node {
 ```ts
 export function processFor(
     node: ElementNode,          // 带有 v-for 指令的节点
-    dir: DirectiveNode,         // v-for 指令
+    dir: DirectiveNode,         // v-for 指令节点
     context: TransformContext,  // 作用域
     processCodegen?: (forNode: ForNode) => (() => void) | undefined // 创建生成器的回调，参数是创建好的 v-for 节点
 ) {
@@ -273,6 +296,9 @@ export interface ForIteratorExpression extends FunctionExpression {
 `renderList` 有两个参数  
 1. 是一个 `ExpressionNode`，其实就是源数据节点  
 2. 是一个 `FunctionExpression`，就是具体渲染子节点的函数，这个函数又有三个参数，分别是 项目、`key` 以及索引   
+    其中函数返回的是一个 `BlockCodegenNode`，包括  
+    * `<div v-for />`  -> `VNodeCall`  
+    * `<slot v-for />` -> `RenderSlotCall`  
 
 接下来看具体的创建过程  
 
@@ -342,7 +368,7 @@ return processFor(node, dir, context, forNode => {
 注意  
 1. 第 8 步中的退出函数会在所有子节点都完成转换时执行，也就是 [处理 v-for 指令](#处理-v-for-指令) 中的 8.2 步骤  
 2. 这里简单说下上面出现的三种 `PatchFlag`  
-    * `PatchFlags.STABLE_FRAGMENT`: 稳定的 `Fragment`，它的子节点不会发生顺序的变化，但是可能存在动态子节点  
+    * `PatchFlags.STABLE_FRAGMENT`: 稳定的 `Fragment`，它的子节点不会发生顺序的变化(子节点的个数不会改变)，但是可能存在动态子节点  
        在更新时只会更新动态子节点，不会全量更新  
     * `PatchFlags.KEYED_FRAGMENT`: 子节点中含有 `key` 的 `Fragment`，它的子节点在更新时会根据 `key` 进行 `diff` 算法来更新  
     * `PatchFlags.UNKEYED_FRAGMENT`: 子节点没有 `key` 的 `Fragment`，它的子节点在更新时会全量更新  
@@ -357,7 +383,7 @@ return processFor(node, dir, context, forNode => {
     也就是顺序不会发生变化，始终是 `10` 个  
     
     由于 `v-for` 值的节点初始时都是 `ConstantTypes.NOT_CONSTANT` 的，唯一能发生变化就是 [解析](#解析-v-for-的值) 中的第 4 步  
-    通过 `transformExpression` 钩子改变  
+    通过 `processExpression` 增加数据来源，所以常量类型是 可静态提升、可以字符串化 都属于稳定的  
 
 3. 在第 7 步创建 `Fragment` 生成器的时候，是否需要追踪是根据 `isStableFragment` 取反决定的  
     * 稳定状态下需要追踪  
@@ -461,10 +487,15 @@ return () => {
     <div v-for="item in 10"></div>
     ```  
 
-    现在是稳定状态，此时会将 `div` 的生成器重写为非 `block`，所以外层的 `Fragment` 必须要追踪变化，也就是必须要开启追踪  
-    这也就是解释了为什么 [processcodegen](#创建生成器--processcodegen) 过程中，只有非稳定状态下才会对 `Fragment` 开启的 `block` 进行追踪  
+    现在是稳定状态，此时会将 `div` 的生成器重写为非 `block`，所以追踪的任务就落在了 `v-for` 的生成器上  
+    也就是创建 `v-for` 的生成器时，稳定状态下是需要追踪 `block` 内的变化   
 
-    相反，对于非稳定状态，`Fragment` 开启的 `block` 不必在追踪，而是由 `div` 的生成器来完成  
+    ```html
+    <div v-for="item in items"></div>
+    ```  
+
+    这种情况由于 `items` 生成的节点仍然是不稳定的，所以 `div` 的生成器依旧是 `block`，追踪的任务由 `div` 的 `block` 完成  
+    所以 `v-for` 的生成器就不需要追踪了，所以要禁止  
 
 ### 创建渲染函数的参数 —— createForLoopParams  
 这个函数主要就是根据解析结果中的 项目、`key` 以及索引，如果有对应的值就创建参数，没有就使用占位符  

@@ -449,13 +449,15 @@ export const babelParserDefaultPlugins = [
 ##### babel AST 转换  
 解析后生成 `AST` 节点，接下里就到了第二步 —— 转换  
 这个过程主要是操作每个 `Identifier` 节点，分析语法与上下文，来决定是否需要增加前缀  
-最后将生成的好的节点与原始代码拼接，最终形成 “复合表达式”，例如存在以下数据  
+最后将生成的好的节点与原始代码拼接，最终形成 “复合表达式”  
+
+例如存在以下数据  
 
 ```html
 <div>{{ foo.bar(baz) }}</div>
 ```  
 
-`div` 的子节点最终形成的 “复合表达式” 如下  
+`div` 的子节点插槽最终形成的 “复合表达式” 如下  
 
 ```ts
 {
@@ -483,6 +485,8 @@ export const babelParserDefaultPlugins = [
 源码中使用 `estree-wolker` 模块来遍历 `AST` 节点
 
 ```ts
+const bailConstant = rawExp.indexOf(`(`) > -1 || rawExp.indexOf('.') > 0
+
 // 1. 所有标识节点的集合
 const ids: (Identifier & PrefixMeta)[] = []
 // 2. 当前作用域中已知变量引用集合
@@ -518,6 +522,7 @@ const parentStack: Node[] = []
                 }
                 // 5.1.2.3 如果变量不需要增加前缀，再检测其是否属于静态属性的 key
                 //         静态属性的 key 会被当做 string 拼接，所以要过滤
+                //         除此之外的所有 Identifier 节点都会被加入到 ids 中
                 else if (!isStaticPropertyKey(node, parent!)) {
                     // TODO: The identifier is considered constant unless it's pointing to a
                     // scope variable (a v-for alias, or a v-slot prop)
@@ -570,7 +575,7 @@ const parentStack: Node[] = []
     leave(node: Node & PrefixMeta, parent: Node | undefined) {
         // 5.2.1 移除当前节点
         parent && parentStack.pop()
-        // 5.2.2 移除函数参数产生的引用
+        // 5.2.2 移除非顶层函数参数产生的引用
         if (node !== ast.body[0].expression && node.scopeIds) {
             node.scopeIds.forEach((id: string) => {
                 knownIds[id]--
@@ -582,6 +587,38 @@ const parentStack: Node[] = []
     }
 })
 ```  
+
+1. 在 5.2.2 中会删除非顶层函数产生的引用  
+    先来看什么是 顶层函数  
+    * 顶层函数：在 [babel 解析](#-babel-解析) 的第 2 步中，`asParams` 为 `true` 会产生的箭头函数   
+    * 非顶层函数：在内部数据中存在函数，例如  
+        ```html
+        <div>{{ { a: foo => foo, b: foo } }}</div>
+        ```  
+
+    接下来看看为什么需要移除 非顶层函数 产生的引用，还是以上面为示例，来看它的转换流程  
+    1. 在处理函数 `foo => foo` 时，会将变量 `foo` 放入 `knownIds` 中，其引用数为 `1`  
+    2. 接下来处理返回值 `foo` 时，由于存在引用，所以不需要增加前缀  
+    3. 接下来到了函数的 `leave` 钩子中，会将函数的所有引用清空  
+    4. 继续到了 `b` 属性的值 `foo` 中，由于现在没有引用，所以需要增加前缀  
+        如果不进行第 3 步，那么现在 `knownIds.foo` 的值还是为 1，所以不会增加前缀，与事实不符  
+
+    那为什么顶层函数就不需要呢？
+    例如存在以下代码  
+
+    ```html
+    <div v-for="({ foo = bar }) in list">
+        {{ foo }}
+    </div>
+    ```  
+
+    在解析 `{ foo = bar }` 时会调用 [processexpression](#转换过程--processexpression) 并将其作为参数，所以 `source` 就是  
+    ```ts
+    ({ foo = bar }) => {}
+    ```  
+    在处理函数时，也会产生 `foo` 的引用(数值为 `1`)，在函数的 `leave` 钩子中，由于这个函数就是 顶层函数，所以不会删除引用  
+    这样在后面的步骤中，会将 `knownIds` 中的 `key` 都记录在结果的 `identifiers` 上，之后会调用 [addidentifiers](增加标识符--addidentifiers) 将变量加入引用集合中  
+    这样，在解析子节点时，碰见这个变量就不会再加前缀了  
 
 ##### 创建复合表达式  
 经过上一步得到的 `ids` 节点列表以及原始变量内容，就可以组合出 “复合表达式” 了，接下来看具体过程  
@@ -639,12 +676,12 @@ if (children.length) {
 // 3.11 如果不存在，则说明 node 还无法形成复合表达式，还是会使用原有的简单表达式
 else {
     ret = node
-    // TODO:
+    // 3.11.1 根据是否存在函数调用来决定常量类型
     ret.constType = bailConstant
-        ? ConstantTypes.NOT_CONSTANT
-        : ConstantTypes.CAN_STRINGIFY
+        ? ConstantTypes.NOT_CONSTANT    // 存在则代表不是常量
+        : ConstantTypes.CAN_STRINGIFY   // 不存在则是常量，可以静态提升
 }
-// 3.12 TODO:
+// 3.12 将当前作用域产生的引用记录在节点上，之后会通过 addIdentifiers 将它们加入到引用集合中
 ret.identifiers = Object.keys(knownIds)
 
 // 3.13 返回最后的节点 ret
@@ -664,6 +701,16 @@ return ret
     ```html
     <div>{{ { foo } }}</div>
     ```  
-    在 [](#babel-ast-转换) 中第 5 步进行转换时，处理到 `foo` 对应的 `Identifier` 节点，复合 5.1.2.2.1 的条件，将 `foo: ` 挂载在 `prefix` 上  
-    接着运行到 [](#创建复合表达式) 中第 3 步遍历到 `foo` 节点时，会将 `leadingText` 以及 `prefix` 合成一个整体(`{ foo: `) 插入到列表中  
-    接着再插入 `_ctx.foo` 对应的节点，形成完整的对象
+    在 [babel ast 转换](#babel-ast-转换) 中第 5 步进行转换时，处理到 `foo` 对应的 `Identifier` 节点，复合 5.1.2.2.1 的条件，将 `foo: ` 挂载在 `prefix` 上  
+    接着运行到 [创建复合表达式](#创建复合表达式) 中第 3 步遍历到 `foo` 节点时，会将 `leadingText` 以及 `prefix` 合成一个整体(`{ foo: `) 插入到列表中  
+    接着再插入 `_ctx.foo` 对应的节点，形成完整的对象  
+
+3. 解析字面量  
+    例如有以下代码  
+
+    ```html
+    {{ 10000n }}
+    {{ 10000n.toString() }}
+    ```  
+    
+    由于不存在任何的 `Identifier` 节点，所以会进入 [创建复合表达式](#创建复合表达式) 中的 3.11，仍然使用原来的 简单表达式，并更新常量类型  

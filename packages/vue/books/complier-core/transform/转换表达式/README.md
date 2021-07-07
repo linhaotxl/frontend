@@ -2,10 +2,10 @@
 
 - [什么是转换表达式](#什么是转换表达式)
 - [存储数据标识](#存储数据标识)
-    - [增加标识符 —— addIdentifiers](#增加标识符--addidentifiers)
-    - [增加标识符个数 —— addId](#增加标识符个数--addid)
-    - [移除标识符 —— removeIdentifiers](#移除标识符--removeidentifiers)
-    - [移除标识符个数 —— removeId](#移除标识符个数--removeid)
+    - [增加变量的引用 —— addIdentifiers](#增加变量的引用--addidentifiers)
+    - [增加变量引用个数 —— addId](#增加变量引用个数--addid)
+    - [减少变量的引用 —— removeIdentifiers](#减少变量的引用--removeidentifiers)
+    - [减少变量引用个数 —— removeId](#减少变量引用个数--removeid)
 - [转换表达式 —— transformExpression](#转换表达式--transformexpression)
 - [转换过程 —— processExpression](#转换过程--processexpression)
     - [简单型数据](#简单型数据)
@@ -17,6 +17,8 @@
             - [babel 解析](#babel-解析)
             - [babel AST 转换](#babel-ast-转换)
             - [创建复合表达式](#创建复合表达式)
+        - [是否需要增加前缀 —— shouldPrefix](#是否需要增加前缀--shouldprefix)
+        - [检测是否是解构的赋值语句 —— isInDestructureAssignment](#检测是否是解构的赋值语句--isindestructureassignment)
 
 <!-- /TOC -->
 
@@ -103,19 +105,23 @@ identifiers: {
 
 **总结：如果变量的引用个数不为 0，说明这个变量在某个作用域内是存在引用的，不会增加前缀，原样输出**  
 
-### 增加标识符 —— addIdentifiers  
-对指定变量增增加引用个数  
+### 增加变量的引用 —— addIdentifiers  
+增加变量的引用个数  
 
 ```ts
 // 声明
 addIdentifiers(exp: ExpressionNode | string): void
-// 实现
+/**
+ * 实现
+ * @param { string | ExpressionNode } exp
+ */
 addIdentifiers(exp) {
     // 具体过程使用 addId 函数实现
-    // 如果变量是 string，直接添加
-    // 如果变量是表达式节点
-    //   存在 identifiers，将其中每个变量都添加
-    //   对于简单表达式，添加其值
+    // 如果 exp 是 string，那么 exp 就是具体的变量名
+    // 如果 exp 是存在 identifiers 的表达式节点
+    //   说明 exp 节点产生了一个或多个变量，增加其中每个变量的引用
+    // 如果 exp 不存在 identifiers 且是简单表达式
+    //   说明 exp 节点是一个单个变量，增加变量的引用
     if (!__BROWSER__) {
         if (isString(exp)) {
             addId(exp)
@@ -128,7 +134,7 @@ addIdentifiers(exp) {
 }
 ```  
 
-### 增加标识符个数 —— addId  
+### 增加变量引用个数 —— addId  
 ```ts
 function addId(id: string) {
     const { identifiers } = context
@@ -139,7 +145,7 @@ function addId(id: string) {
 }
 ```  
 
-### 移除标识符 —— removeIdentifiers  
+### 减少变量的引用 —— removeIdentifiers  
 移除代表将
 
 ```ts
@@ -157,7 +163,7 @@ removeIdentifiers(exp) {
 },
 ```  
 
-### 移除标识符个数 —— removeId  
+### 减少变量引用个数 —— removeId  
 ```ts
 function removeId(id: string) {
     context.identifiers[id]!--
@@ -165,7 +171,7 @@ function removeId(id: string) {
 ```   
 
 ## 转换表达式 —— transformExpression  
-转换表达式 的钩子很简单，
+转换表达式的钩子很简单，只会处理特定的几种情况，并且都是即时处理，没有退出函数  
 
 ```ts
 export const transformExpression: NodeTransform = (node, context) => {
@@ -188,6 +194,7 @@ export const transformExpression: NodeTransform = (node, context) => {
                 // 2.3 解析指令的值
                 //     除了 v-on 之外，剩下的指令值都会转换
                 //     当 v-on 指令不带参数也会解析，也就是 v-on="handlers"，带参数会在 v-on 的指令钩子中处理
+                //     当解析的是 v-slot 指令，则会将它的值作为参数解析
                 if (
                     exp &&
                     exp.type === NodeTypes.SIMPLE_EXPRESSION &&
@@ -216,7 +223,7 @@ export const transformExpression: NodeTransform = (node, context) => {
 先来看各个参数的意义  
 ```ts
 export function processExpression(
-    // 需要转换的表达式节点，还没有经过任何钩子处理，所以是 解析 过程中生成的简单表达式节点
+    // 需要转换的表达式节点，因为还没有经过任何钩子处理，所以是 解析 过程中生成的简单表达式节点
     node: SimpleExpressionNode,
     // 作用域
     context: TransformContext,
@@ -230,14 +237,14 @@ export function processExpression(
 ```  
 
 1. 什么是作为参数？  
-    指节点的内容是函数的参数，参数名是自定义的，所以函数的参数是不需要 增加前缀 的  
-
+    指节点的内容是函数的参数，由于函数的参数名是自定义的，所以参数不需要 增加前缀   
+    
     ```html
     <div v-for="(item, key, index) in items"></div>
     ```  
     `v-for` 中的 `item`、`key` 以及 `index` 都属于参数，所以在解析这三个值时，`asParams` 就是 `true`  
 
-2. 什么是作为语句？
+2. 什么是作为语句？  
     指节点的内容是 `JS` 的语句，只有在 `v-on` 中存在多个语句时，这个值才会为 `true`  
 
     ```html
@@ -713,4 +720,118 @@ return ret
     {{ 10000n.toString() }}
     ```  
     
-    由于不存在任何的 `Identifier` 节点，所以会进入 [创建复合表达式](#创建复合表达式) 中的 3.11，仍然使用原来的 简单表达式，并更新常量类型  
+    由于不存在任何的 `Identifier` 节点，所以会进入 [创建复合表达式](#创建复合表达式) 中的 3.11，仍然使用原来的 简单表达式，并更新常量类型   
+
+#### 是否需要增加前缀 —— shouldPrefix  
+这个函数只会从语法角度去分析，例如函数的参数、静态属性的 `key` 等，都是不需要增加前缀的  
+
+```ts
+function shouldPrefix(
+    id: Identifier,     // 检测 id 是否需要增加前缀
+    parent: Node,       // id 的父节点
+    parentStack: Node[] // id 的父节点列表
+) {
+    // 1. 处理定义的变量名，不应该增加前缀，包括两种
+    //    变量的定义，const a = name
+    //    类定义，class Person {}
+    //    这两种节点的 id 都指向变量名
+    if (
+        (parent.type === 'VariableDeclarator' ||
+        parent.type === 'ClassDeclaration') &&
+        parent.id === id
+    ) {
+        return false
+    }
+
+    // 2. 处理父节点是函数
+    if (isFunction(parent)) {
+        // 2.1 如果 id 是函数名，则不需要处理(定义函数名)
+        if ((parent as any).id === id) {
+            return false
+        }
+        // 2.2 如果 id 是参数，则不需要处理
+        if (parent.params.includes(id)) {
+            return false
+        }
+    }
+
+    // 3. 如果 id 是静态属性的 key，则不需要处理
+    if (isStaticPropertyKey(id, parent)) {
+        return false
+    }
+
+    // 4. 如果不是解构的赋值语句，则不需要增加前缀
+    //    解构的赋值语句相当于定义变量
+    if (
+        parent.type === 'ArrayPattern' &&
+        !isInDestructureAssignment(parent, parentStack)
+    ) {
+        return false
+    }
+
+    // 5. 处理成员调用，当 id 是静态属性则不需要增加前缀
+    //    静态属性：a.b a?.b
+    //    动态属性：a[b]，a?.[b]，需要对 b 增加前缀
+    if (
+        (parent.type === 'MemberExpression' ||
+        parent.type === 'OptionalMemberExpression') &&
+        parent.property === id &&
+        !parent.computed
+    ) {
+        return false
+    }
+
+    // 6. arguments 关键字不需要增加前缀
+    if (id.name === 'arguments') {
+        return false
+    }
+
+    // 7. 如果 id 是全局变量，则不需要处理
+    if (isGloballyWhitelisted(id.name)) {
+        return false
+    }
+
+    // 8. 如果 id 是 webpack 中的 require 函数，则不需要处理
+    if (id.name === 'require') {
+        return false
+    }
+
+    // 9. 剩余情况都需要处理
+    return true
+}
+```  
+
+#### 检测是否是解构的赋值语句 —— isInDestructureAssignment  
+以下情况都属于解构赋值  
+
+```ts
+const [a, b] = []
+
+function func1 () {}
+```  
+
+接下来具体实现  
+
+```ts
+function isInDestructureAssignment(parent: Node, parentStack: Node[]): boolean {
+    // 1. 父节点必须是 数组解构 或 对象属性
+    if (
+        parent &&
+        (parent.type === 'ObjectProperty' || parent.type === 'ArrayPattern')
+    ) {
+        // 1.1 一直向上层查找
+        //     如果存在赋值语句，说明满足条件
+        //     如果存在 不是属性，也不是解构的语句，则不满足条件
+        let i = parentStack.length
+        while (i--) {
+            const p = parentStack[i]
+            if (p.type === 'AssignmentExpression') {
+                return true
+            } else if (p.type !== 'ObjectProperty' && !p.type.endsWith('Pattern')) {
+                break
+            }
+        }
+    }
+    return false
+}
+```  

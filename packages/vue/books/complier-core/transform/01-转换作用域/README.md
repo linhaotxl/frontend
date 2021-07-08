@@ -79,6 +79,10 @@ export interface TransformOptions extends SharedTransformCodegenOptions {
      */
     cacheHandlers?: boolean
 
+    /**
+     * 通过 babel 解析模板中的语法时用到的插件
+     * 例如在模板中使用可选链 a?.b，那么就需要使用 optionalChaining 插件
+     */
     expressionPlugins?: ParserPlugin[]
 
     scopeId?: string | null
@@ -90,8 +94,9 @@ export interface TransformOptions extends SharedTransformCodegenOptions {
 }
 ```  
 
+以下是 “转换” 界定啊和 “生成” 节点公用的配置  
+
 ```ts
-// 转换节点和生成节点共用的配置
 interface SharedTransformCodegenOptions {
     // 同上
     prefixIdentifiers?: boolean
@@ -122,7 +127,7 @@ export type NodeTransform = (
 ) => void | (() => void) | (() => void)[]
 ```  
 
-它的返回值可以是函数或者函数列表，我们把返回值称为 “退出函数”  
+它的返回值可以是函数或者函数列表，我们把这个函数称为 “退出函数”  
 “退出函数” 并不会立即执行，而是会等到这个节点的所有子节点都完成转换时再去执行  
 
 上面说到的具体的节点就是 `RootNode` 以及 `TemplateChildNode`，来看 `TemplateChildNode` 都包括哪些  
@@ -159,10 +164,10 @@ export type TemplateChildNode =
 ```ts
 export type DirectiveTransform = (
     dir: DirectiveNode,           // 指令节点
-    node: ElementNode,            // 元素节点，因为指令只能存在于元素上
+    node: ElementNode,            // 存在指令的元素节点
     context: TransformContext,    // 作用域
-    // 增加函数，由具体平台提供，参数是转换的指令结果
-    // 例如 浏览器环境 可以提供该函数，继续对一些指令再次处理
+    // 增强函数，由具体平台提供，参数是转换的指令结果
+    // 例如 浏览器 下可以提供该函数，继续处理指令，增加只有浏览器才有的特性
     augmentor?: (ret: DirectiveTransformResult) => DirectiveTransformResult
 ) => DirectiveTransformResult
 ```   
@@ -275,7 +280,7 @@ export function createTransformContext(
 #### 帮助模块 —— helpers  
 什么是帮助模块？  
 例如在模板中，针对每个元素，都会通过 `createVNode` 创建一个 `vnode` 对象，或者使用了内置组件 `suspense`、`kepp-alive` 等  
-上面的 `createVNode`、`suspense`、`keep-alive` 都需要从 `vue` 模块中导入再使用  
+而 `createVNode`、`suspense`、`keep-alive` 这些函数或变量都需要从 `vue` 模块中导入再使用  
 所以，帮助模块可以理解为需要导入的函数或变量，这些模块都可以在 “runtime-core” 包里找到，接下来看看都有哪些模块函数  
 
 ```ts
@@ -349,7 +354,7 @@ export const helperNameMap: any = {
 ```  
 
 在转换的过程中，如果需要使用这些模块，那么会通过 `helper` 函数，将模块标识存入 `helpers` 集合中  
-在之后的 “生成” 阶段，会将 `helpers` 中存储的标识依次导入，以供使用后续使用  
+在之后的 “生成” 阶段，会将 `helpers` 中的标识依次导入，以供渲染函数中使用  
 
 ```ts
 /**
@@ -362,14 +367,15 @@ helper(name) {
 }
 ```  
 
-`helperString` 不仅会存储模块标识，还会返回使用的模块名  
-在 “生成” 阶段创建导入代码时，会将 `helpers` 中的模块重新命名，增加下划线 `_`，例如  
+`helperString` 不仅会存储模块标识，还会返回具体的模块名  
+
+由于在 “生成” 阶段创建导入代码时，会将 `helpers` 中的模块重新命名，增加下划线 `_`，例如  
   
 ```ts
 import { createVNode as _createVNode } from 'vue'
 ```  
 
-所以在使用的使用也就要使用 `_createVNode` 而非 `createVNode`  
+所以在 `helperString` 中也会增加 `_`，具体使用的就是 `_createVNode` 而非 `createVNode`  
 
 ```ts
 helperString(name) {
@@ -378,7 +384,7 @@ helperString(name) {
 ```  
 
 #### 替换节点 —— replaceNode  
-将当前正在执行钩子函数的节点替换为新的节点，修改 `currentNode` 和 `parent.children` 中的节点  
+将当前正在执行钩子函数的节点替换为指定节点，修改 `currentNode` 和 `parent.children` 中的节点  
 
 ```ts
 replaceNode(node) {
@@ -386,8 +392,8 @@ replaceNode(node) {
 }
 ```  
 
-**替换后的新节点还会执行已经执行过的钩子函数吗？**  
-会的，源码中做了处理，对于替换后的新节点，会再次对其进行从头到尾的转换过程，具体过程在之后会看到  
+**Q：替换后的新节点还会执行已经执行过的钩子函数吗？**  
+A：会的，源码中做了处理，对于替换后的新节点，会再次对其进行从头到尾的转换过程，具体过程在之后会看到  
 其实，整个源码中只有 `v-if` 和 `v-for` 两个钩子函数会用到 `replaceNode`  
 
 #### 删除节点 —— removeNode  
@@ -409,17 +415,17 @@ removeNode(node) {
             ? context.childIndex
             : -1
     
-    // 3. 删除当前正在转换的节点，以下情况满足条件
-    //    1. 没有传递参数 node
-    //    2. 需要删除的节点 node 就是当前正在转换的 currentNode
+    // 3. 删除当前正在转换的节点，以下两种情况均是删除当前节点
+    //    a. 没有传递参数 node
+    //    b. 需要删除的节点 node 就是当前正在转换的 currentNode
     if (!node || node === context.currentNode) {
         // 3.1 将当前正在转换的 node 置空，并执行删除的钩子函数
         context.currentNode = null
         context.onNodeRemoved()
     }
-    // 4. 能进入 else 的唯一入口就是，删除的 node 并不是 currentNode
-    //    如果删除的是当前节点之后的节点，由于后面的节点还没有处理，所以不会影响，直接删除即可
-    //    如果删除的是当前节点之前的节点，那么会将 childIndex - 1，currentNode 的指向并不会改变
+    // 4. 如果删除的 node 并不是当前节点，那再检测删除的 node 是在当前节点之前还是之后
+    //    如果删除的 node 是当前节点之后的节点，由于后面的节点还没有处理，所以不会影响，直接删除即可
+    //    如果删除的 node 是当前节点之前的节点，那么只会将 childIndex - 1，currentNode 的指向并不会改变
     else {
         if (context.childIndex > removalIndex) {
             context.childIndex--

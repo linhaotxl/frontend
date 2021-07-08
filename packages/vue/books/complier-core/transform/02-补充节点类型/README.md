@@ -3,6 +3,7 @@
 - [补充节点类型](#补充节点类型)
     - [创建简单表达式节点 —— createSimpleExpression](#创建简单表达式节点--createsimpleexpression)
     - [创建复合表达式 —— createCompoundExpression](#创建复合表达式--createcompoundexpression)
+    - [表达式节点](#表达式节点)
     - [创建插值节点 —— createInterpolation](#创建插值节点--createinterpolation)
     - [创建 JS 数组节点 —— createArrayExpression](#创建-js-数组节点--createarrayexpression)
     - [创建 JS 对象属性节点 —— createObjectProperty](#创建-js-对象属性节点--createobjectproperty)
@@ -25,17 +26,17 @@ export const enum NodeTypes {
     ATTRIBUTE,
     DIRECTIVE,
     
-    // containers
+    // 容器型
     COMPOUND_EXPRESSION,        // 复合表达式
     IF,                         // v-if 节点
     IF_BRANCH,                  // v-if 的分支节点
     FOR,                        // v-for 节点
     TEXT_CALL,                  // 通过 createTextVNode 创建文本 vnode 的节点
               
-    // codegen
+    // 生成器型
     VNODE_CALL,                 // 通过 createVNode 创建 vnode 的节点
     
-    // 下面几种类型对应 JS 中的数据类型
+    // JS 中的数据类型
     JS_CALL_EXPRESSION,         // 函数调用节点
     JS_OBJECT_EXPRESSION,       // 对象节点
     JS_PROPERTY,                // 对象属性节点
@@ -92,6 +93,8 @@ export function createSimpleExpression(
 }
 ```  
 
+如果是静态类型，那么它的常量类型始终是 `CAN_STRINGIFY`  
+
 ### 创建复合表达式 —— createCompoundExpression  
 复合表达式是将连续的文本、插值、简单表达式连接起来形成的，例如  
 
@@ -99,7 +102,7 @@ export function createSimpleExpression(
 <div>hello {{ name }}</div>
 ```  
 
-`div` 的子元素在 “转换” 完成后，会变成一个节点，就是 复合表达式节点，由 `hello` 和 `{{ name }}` 组成  
+`div` 的子元素在 “转换” 完成后，会变成一个节点，就是“复合表达式”，由 `hello` 和 `{{ name }}` 组成  
 
 再来看它的结构  
 
@@ -115,6 +118,8 @@ export interface CompoundExpressionNode extends Node {
         | symbol)[]
 ```  
 
+复合表达式 也存在 `identifiers` 属性，作用和 [简单表达式](#创建简单表达式节点--createsimpleexpression) 一样  
+
 ```ts
 export function createCompoundExpression(
     children: CompoundExpressionNode['children'],   // 连接列表
@@ -126,6 +131,13 @@ export function createCompoundExpression(
         children
     }
 }
+```  
+
+### 表达式节点  
+“表达式节点” 就是将 “简单” 和 “复合” 联合起来  
+
+```ts
+export type ExpressionNode = SimpleExpressionNode | CompoundExpressionNode
 ```  
 
 ### 创建插值节点 —— createInterpolation  

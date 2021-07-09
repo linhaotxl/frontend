@@ -38,7 +38,7 @@ export function transform(
     root.temps = context.temps
     root.cached = context.cached
 }
-```  
+```
 
 第 5 步中将作用域中的内容挂载在了根节点上，接下来复习下根节点的结构  
 
@@ -56,7 +56,7 @@ export interface RootNode extends Node {
     ssrHelpers?: symbol[]
     codegenNode?: TemplateChildNode | JSChildNode | BlockStatement | undefined
 }
-```  
+```
 
 ### 转换节点 —— traverseNode  
 这个函数转换具体的节点，会依次调用所有的钩子函数，并再处理子节点  
@@ -66,7 +66,7 @@ export function traverseNode(
     node: RootNode | TemplateChildNode, // 待转换的节点
     context: TransformContext           // 作用域
 ) {
-    // 1. 在作用域中保存当前转换的节点
+    // 1. 转换开始时，在作用域中保存当前转换的节点
     context.currentNode = node
     // 2. 获取节点钩子函数列表
     const { nodeTransforms } = context
@@ -74,8 +74,8 @@ export function traverseNode(
     const exitFns = []
     // 4. 遍历所有钩子函数
     for (let i = 0; i < nodeTransforms.length; i++) {
-        // 4.1 执行钩子函数，钩子函数的返回值是退出函数
-        //     如果退出函数存在，则将其保存在 exitFns 中，等到所有子节点完成转换再执行
+        // 4.1 执行钩子函数
+        //     如果退出函数存在，则将其保存在 exitFns 中，并不会立即执行
         const onExit = nodeTransforms[i](node, context)
         if (onExit) {
             if (isArray(onExit)) {
@@ -88,8 +88,8 @@ export function traverseNode(
         if (!context.currentNode) {
             return
         }
-        // 4.3 如果没有删除，则会更新 node 为正在转换的节点
-        //     如果在钩子函数中执行了替换节点 replaceNode，则 currentNode 就是替换后的节点
+        // 4.3 如果没有删除，则会更新 node
+        //     如果在钩子函数中执行了替换节点 replaceNode，那么此时的 currentNode 就是替换后的节点
         //     接下来就会转换替换后的节点，至于替换前的旧节点，接下来还会处理，可以参考后面的示例
         else {
             node = context.currentNode
@@ -101,8 +101,6 @@ export function traverseNode(
         // 5.1 注释节点，导入 createComment 模块函数
         case NodeTypes.COMMENT:
             if (!context.ssr) {
-                // inject import for the Comment symbol, which is needed for creating
-                // comment nodes with `createVNode`
                 context.helper(CREATE_COMMENT)
             }
             break
@@ -115,7 +113,7 @@ export function traverseNode(
             break
 
         // 5.3 v-if 节点
-        //     遍历分支节点，对每个节点进行转换
+        //     遍历分支节点，对每个分支节点进行转换
         case NodeTypes.IF:
             for (let i = 0; i < node.branches.length; i++) {
                 traverseNode(node.branches[i], context)
@@ -123,7 +121,7 @@ export function traverseNode(
             break
             
         // 5.4 以下节点都需要转换子节点
-        //     1.if 分支节点
+        //     1. if 分支节点
         //     2. v-for 节点
         //     3. 元素节点
         //     4. 根节点
@@ -143,28 +141,15 @@ export function traverseNode(
         exitFns[i]()
     }
 }
-```  
+```
 
-下面以 `v-if` 举例说明，有以下代码  
+上面出现的 `if` 与 `for` 节点会在后面内容中具体介绍，这里先有个印象
 
-```html
-<div v-if="a"></div>
-```  
+**Q：4.2 的删除会在什么时候发生**  
+A：由于 “删除节点” 只发生在 `v-if` 钩子中，所以具体内容可以参考 [v-if]()  
 
-`div` 由于存在 `v-if` 指令，它的转换过程大致如下  
-1. 创建 `if` 分支节点(类型是 `NodeTypes.IF_BRANCH`)，并将 `div` 放入分支 `children` 中 
-2. 创建 `if` 节点(类型是 `NodeTypes.IF`)，将上一步创建好的分支放入分支列表 `branchs` 中  
-3. 将当前正在转换的节点(`div`)替换为 `if` 节点  
-
-这样，在 4.3 中，重写的 `node` 就是 `if` 节点，接下来就会继续转换 `if` 节点  
-在 5.3 中会将 `if` 的所有分支进行转换，转换分支节点又会进入 5.4 转换子节点，从而完成对 `div` 的所有转换  
-
-可以看出，`div` 实际上做了两次转换，一次是最开始的转化，一次是作为分支的子节点转换  
-那如何保证作为分支的子节点转换时，不会再一次进入创建 `if` 节点的逻辑呢  
-答案可以在 [创建结构指令](#创建结构指令--createstructuraldirectivetransform) 中找到(可以先透露下，其实是 `props` 中删除了 `v-if` 节点)  
-
-这也就解释了 4.3 的目的以及替换后的节点如何继续转换  
-
+**Q：4.3 替换后会如何处理旧节点**  
+A：由于 “替换节点” 只发生在 `v-if` 或 `v-for` 钩子中，所以具体内容可以参考 [v-if]() 或 [v-for]()  
 
 ### 转换子节点 —— traverseChildren  
 从上面可以看出，只有 4 种类型的节点需要转换子节点，因为只有这 4 种节点才会拥有节点 `children`  
@@ -178,7 +163,7 @@ export function traverseChildren(
 ) {
     // 1. 遍历子节点的索引
     let i = 0
-    // 2. 删除节点的钩子
+    // 2. 删除节点的钩子，当调用 removeNode 时会执行
     const nodeRemoved = () => {
         i--
     }
@@ -196,18 +181,17 @@ export function traverseChildren(
         traverseNode(child, context)
     }
 }
-```  
+```
 
-当调用作用域中的 `removeNode` 删除节点时，在具体删除之前，会先调用这里的钩子，将索引向前移动一位，即减1  
-这样在转换下一个节点时，对索引加 1 后，才能正确指向删除的那个位置
+当调用作用域中的 [removeNode](https://github.com/linhaotxl/frontend/blob/master/packages/vue/books/complier-core/transform/01-%E8%BD%AC%E6%8D%A2%E4%BD%9C%E7%94%A8%E5%9F%9F/README.md#%E5%88%A0%E9%99%A4%E8%8A%82%E7%82%B9--removenode) 删除节点时，在具体删除之前，会先调用这里的钩子，将索引向前移动一位，即减1  
+这样才能正确指向下一个需要转换的节点
 
 ## 创建结构指令 —— createStructuralDirectiveTransform   
 因为接下来的需要看 `v-if` 以及 `v-for` 两个钩子的源码，而这两个钩子都会由这个函数创建，所以把这块内容放在这里  
 
 什么是结构指令？  
-结构指令就是会修改原有节点的类型  
-例如 [traversenode](#转换节点--traversenode) 中提到的 `v-if`，会先创建 `if` 节点并替换原有的节点(其实 `v-for` 也是这样操作的)  
-
+结构指令就是会修改原有节点结构  
+例如 `v-if` 和 `v-for`，就是先创建对应的 `if` 或 `for` 节点，然后替换原有的节点  
 我们称这样的指令为 “结构指令”(目前就只有 `v-if` 和 `v-for` 两个)  
 
 接下来先看这个函数都做了什么  
@@ -227,7 +211,7 @@ export function createStructuralDirectiveTransform(
         // 2.1 节点类型必须是元素
         if (node.type === NodeTypes.ELEMENT) {
             const { props } = node
-            // 2.1.1 不会处理 template 上的 v-slot，这个指令会在 v-slot 的钩子中单独处理
+            // 2.1.1 不会处理 template 上存在 v-slot 的节点，这个节点会在 v-slot 的钩子中单独处理
             //       <template v-slot:fallback /> <template #falback />
             if (node.tagType === ElementTypes.TEMPLATE && props.some(isVSlot)) {
                 return
@@ -239,10 +223,10 @@ export function createStructuralDirectiveTransform(
                 const prop = props[i]
                 // 2.1.3.1 只会处理满足条件的指令
                 if (prop.type === NodeTypes.DIRECTIVE && matches(prop.name)) {
-                    // 如果满足条件，会将指令从 props 中删除，避免无限递归
+                    // 2.1.3.2 如果满足条件，会将指令从 props 中删除，避免无限递归
                     props.splice(i, 1)
                     i--
-                    // 执行具体的转换函数，并存储退出函数
+                    // 2.1.3.3 执行具体的转换函数，并存储退出函数
                     const onExit = fn(node, prop, context)
                     if (onExit) exitFns.push(onExit)
                 }
@@ -252,4 +236,21 @@ export function createStructuralDirectiveTransform(
         }
     }
 }
-```  
+```
+
+**Q1：接下来举例说明这个函数的大致流程**  
+A1：接下来会以 `v-if` 举例说明，例如存在以下代码  
+
+```html
+<div v-if="ok"></div>
+```
+
+1. 经过 “解析” 会得到一个 `div` 的节点，接下来开始经过 `div` 的转换，首先进入到 `v-if` 钩子处理  
+2. 将 `div` 上的 `v-if` 指令删除，执行具体的 `v-if` 钩子，即 2.1.3.3
+3. 创建 `if` 分支节点(类型是 `NodeTypes.IF_BRANCH`)，并将 `div` 放入分支的 `children` 中  
+4. 创建 `if` 节点(类型是 `NodeTypes.IF`)，将上一步创建好的分支放入分支列表 `branchs` 中  
+5. 将当前正在转换的节点`div`替换为 `if` 节点  
+    由于替换了节点，导致 `context.currentNode` 就是 `if` 节点，在 [traverseNode](#转换节点--traversenode) 4.3 中修改了 `node`，接下来就会对 `if` 节点开始转换  
+    转换 `if` 节点又会转换的所有分支节点(通过 [traverseNode](#转换节点--traversenode) 的 5.3)  
+    转换分支节点又会进入 [traverseNode](#转换节点--traversenode) 5.4，转换子节点，也就是 `div`  
+6. 再一次转换 `div`，和上一次不同，这次 `div` 上已经没有了 `v-if` 指令，所以会继续执行后面的钩子  

@@ -27,13 +27,13 @@
 
 ```html
 <div>{{ name }}</div>
-```  
+```
 
 这段模板最终会被编译成  
 
 ```ts
 _createVNode("div", null, _toDisplayString(_ctx.name), 1 /* TEXT */)
-```  
+```
 
 可以看到，`name` 前面增加了数据来源前缀 `_ctx`，标明了数据来源，这个过程就是 “转换表达式”  
 也就是增加数据的来源前缀  
@@ -48,7 +48,7 @@ _createVNode("div", null, _toDisplayString(_ctx.name), 1 /* TEXT */)
 identifiers: { [name: string]: number | undefined }
 // 定义
 identifiers: Object.create(null)
-```  
+```
 
 其中 `key` 是变量名，而 `value` 是变量名引用的个数  
 
@@ -57,14 +57,14 @@ identifiers: Object.create(null)
 
 ```html
 <div @click="$event => $event"></div>
-```  
+```
 在事件处理函数中，`$event` 属于参数，所以是不需要增加前缀的，此时 `identifiers` 就是  
 
 ```ts
 identifiers: {
     '$event': 1
 }
-```    
+```
 
 再看另一个示例  
 
@@ -72,7 +72,7 @@ identifiers: {
 <div v-for="(item, key, index) in items" :key="key">
     <span>{{ index }}-{{ item.name }}</span>
 </div>
-```  
+```
 在 `v-for` 中的 `item`、`key` 以及 `index` 这三个也都不会增加前缀，此时 `identifiers` 就是  
 
 ```ts
@@ -81,7 +81,7 @@ identifiers: {
     'key': 1,
     'index': 1,
 }
-```  
+```
 
 至于 `value` 为什么是数字，是因为可能存在同一个变量名，进行了多次引用，例如在嵌套 `v-for` 时  
 
@@ -90,7 +90,7 @@ identifiers: {
     <span v-for="item in list2"></span>
     <i>{{ item.name }}</i>
 </div>
-```  
+```
 
 `identifiers` 的过程如下  
 
@@ -132,7 +132,7 @@ addIdentifiers(exp) {
         }
     }
 }
-```  
+```
 
 ### 增加变量引用个数 —— addId  
 ```ts
@@ -143,7 +143,7 @@ function addId(id: string) {
     }
     identifiers[id]!++
 }
-```  
+```
 
 ### 减少变量的引用 —— removeIdentifiers  
 移除代表将
@@ -161,14 +161,14 @@ removeIdentifiers(exp) {
         }
     }
 },
-```  
+```
 
 ### 减少变量引用个数 —— removeId  
 ```ts
 function removeId(id: string) {
     context.identifiers[id]!--
 }
-```   
+```
 
 ## 转换表达式 —— transformExpression  
 转换表达式的钩子很简单，只会处理特定的几种情况，并且都是即时处理，没有退出函数  
@@ -203,7 +203,6 @@ export const transformExpression: NodeTransform = (node, context) => {
                     dir.exp = processExpression(
                         exp,
                         context,
-                        // slot args must be processed as function params
                         dir.name === 'slot'
                     )
                 }
@@ -215,7 +214,7 @@ export const transformExpression: NodeTransform = (node, context) => {
         }
     }
 }
-```  
+```
 
 具体的转换过程由 [processExpression](#转换过程--processexpression) 完成，接下来就看这个函数做了什么  
 
@@ -234,14 +233,14 @@ export function processExpression(
 ): ExpressionNode {
     /* ... */
 }
-```  
+```
 
 1. 什么是作为参数？  
     指节点的内容是函数的参数，由于函数的参数名是自定义的，所以参数不需要 增加前缀   
     
     ```html
     <div v-for="(item, key, index) in items"></div>
-    ```  
+    ```
     `v-for` 中的 `item`、`key` 以及 `index` 都属于参数，所以在解析这三个值时，`asParams` 就是 `true`  
 
 2. 什么是作为语句？  
@@ -249,10 +248,11 @@ export function processExpression(
 
     ```html
     <div @click="foo(); bar();"></div>
-    ```  
+    ```
 
 3. 返回值为 `ExpressionNode`  
-    转过过程根据节点内容分为 “简单型” 和 “复杂型” 两种  
+    转换过程根据节点内容分为 “简单型” 和 “复杂型” 两种  
+    
     * 简单型，可以理解为单个变量，例如 `{{ name }}`，最后的结果依然是 简单表达式  
     * 复杂型，可以理解为存在其他操作的变量，例如 `{{ info.name }}`、`{{ ++info }}`，最后生成会是 复合表达式  
 
@@ -282,7 +282,7 @@ export function processExpression(
 
     // 3. 检测变量名是否是简单型
     if (isSimpleIdentifier(rawExp)) {
-        // 3.1 检测变量名是否是否存在于作用域中
+        // 3.1 检测变量名是否存在引用
         const isScopeVarReference = context.identifiers[rawExp]
         // 3.2 检测变量名是否是全局变量
         const isAllowedGlobal = isGloballyWhitelisted(rawExp)
@@ -290,11 +290,11 @@ export function processExpression(
         const isLiteral = isLiteralWhitelisted(rawExp)
         // 3.4 只有满足以下 4 个条件，才会真正进行处理
         //     1). 变量名不是函数参数
-        //     2). 变量名不是作用域中的参数
+        //     2). 变量名不存在引用
         //     3). 变量名不是全局变量
         //     4). 变量名不是字面量常量
         if (!asParams && !isScopeVarReference && !isAllowedGlobal && !isLiteral) {
-            // const bindings exposed from setup can be skipped for patching but
+            // TODO: const bindings exposed from setup can be skipped for patching but
             // cannot be hoisted to module scope
             if (bindingMetadata[node.content] === BindingTypes.SETUP_CONST) {
                 node.constType = ConstantTypes.CAN_SKIP_PATCH
@@ -303,13 +303,13 @@ export function processExpression(
             node.content = rewriteIdentifier(rawExp)
         }
         // 3.5 如果有一种情况不满足，则说明变量名是不需要增加前缀的
-        //     接下里会处理不存在于作用域中的变量
+        //     接下里会处理没有引用的变量
         else if (!isScopeVarReference) {
-            // 3.5.1 如果是字面量，则更新常量类型是 CAN_STRINGIFY，可以 string 化
+            // 3.5.1 如果是字面量，则更新常量类型是 CAN_STRINGIFY，可以 string 化以及静态提升
             if (isLiteral) {
                 node.constType = ConstantTypes.CAN_STRINGIFY
             }
-            // 3.5.2 如果
+            // 3.5.2 如果不是，则可以静态提升
             else {
                 node.constType = ConstantTypes.CAN_HOIST
             }
@@ -320,7 +320,7 @@ export function processExpression(
 
     /* 接来下的步骤都是处理复杂型数据 */
 }
-```  
+```
 
 1. 接下来举例说明满足 3.4 的情况  
     ```html
@@ -329,7 +329,7 @@ export function processExpression(
         <span>{{ NaN }}</span>
         <span>{{ true }}</span>
     </div>
-    ```  
+    ```
     
     在解析 `v-for` 指令时，会将 `item`、`key` 以及 `index` 作为参数解析，并通过 [addIdentifiers](#增加标识符--addidentifiers) 添加到 `identifiers` 中  
     在解析 `{{ item }}` 时，发现 `isScopeVarReference` 的值为 `1`，所以不会进行重写变量名，并且也不会修改常量类型，因为 `item` 就是参数，所以无法静态提升    
@@ -363,7 +363,7 @@ const func3 = () => {}
 const obj = {
     func4 () {}
 }
-```  
+```
 
 所以只需要检测节点类型属于以上任意一种就说明是函数  
 
@@ -371,7 +371,7 @@ const obj = {
 const isFunction = (node: Node): node is Function => {
     return /Function(?:Expression|Declaration)$|Method$/.test(node.type)
 }
-```  
+```
 
 #### 检测是否是静态属性节点 —— isStaticProperty  
 这个函数用来检测对象的属性名是否是静态的，只有用 `[]` 包裹的属性名属于动态的(即计算属性)，在节点中用 `computed` 来表明是否是计算属性  
@@ -386,7 +386,7 @@ const obj = {
     // ObjectMethod
     print () {}
 }
-```  
+```
 
 所以需要同时满足属于对象属性且不是计算属性即可  
 
@@ -395,7 +395,7 @@ const isStaticProperty = (node: Node): node is ObjectProperty =>
     node &&
     (node.type === 'ObjectProperty' || node.type === 'ObjectMethod') &&
     !node.computed
-```  
+```
 
 #### 检测静态属性的名称是否和指定节点一致 —— isStaticPropertyKey  
 
@@ -403,7 +403,7 @@ const isStaticProperty = (node: Node): node is ObjectProperty =>
 const isStaticPropertyKey = (node: Node, parent: Node) =>
     // parent 必须是静态属性节点，并且属性名 key 要和指定 node 一致
     isStaticProperty(parent) && parent.key === node
-```  
+```
 
 #### 转换过程  
 接下来一步一步解释具体的过程  
@@ -439,7 +439,7 @@ try {
     )
     return node
 }
-```  
+```
 
 默认的 `babel` 插件如下  
 
@@ -449,20 +449,20 @@ export const babelParserDefaultPlugins = [
     'optionalChaining',             // 可选链，a?.b
     'nullishCoalescingOperator'     // 空值合并操作，a?.b ?? 'aaa'
 ] as const
-```  
+```
 
 也就是说，在模板中是可以使用 “可选连” 等比较新的语法，但是必须提供对应的插件去处理  
 
 ##### babel AST 转换  
 解析后生成 `AST` 节点，接下里就到了第二步 —— 转换  
 这个过程主要是操作每个 `Identifier` 节点，分析语法与上下文，来决定是否需要增加前缀  
-最后将生成的好的节点与原始代码拼接，最终形成 “复合表达式”  
+最后将每个 `Identifier` 节点与原始代码拼接，最终形成 “复合表达式”  
 
 例如存在以下数据  
 
 ```html
 <div>{{ foo.bar(baz) }}</div>
-```  
+```
 
 `div` 的子节点插槽最终形成的 “复合表达式” 如下  
 
@@ -487,14 +487,15 @@ export const babelParserDefaultPlugins = [
         ')'
     ]
 }
-```  
+```
 
 源码中使用 `estree-wolker` 模块来遍历 `AST` 节点
 
 ```ts
+// 是否存在函数调用或访问属性
 const bailConstant = rawExp.indexOf(`(`) > -1 || rawExp.indexOf('.') > 0
 
-// 1. 所有标识节点的集合
+// 1. 所有 Identifier 节点的集合
 const ids: (Identifier & PrefixMeta)[] = []
 // 2. 当前作用域中已知变量引用集合
 const knownIds = Object.create(context.identifiers)
@@ -518,8 +519,8 @@ const parentStack: Node[] = []
                 if (!knownIds[node.name] && needPrefix) {
                     // 5.1.2.2.1 如果父节点是对象属性，并且 key 是静态的，并且属性名和值是简写，例如 const obj = { foo }
                     //           那么此时的 node 无非是属性名或属性值中的 Identifier
+                  	//					 如果是这种情况，则会将属性名挂载在节点的 prefix 上，后面会用到
                     if (isStaticProperty(parent!) && parent.shorthand) {
-                        // 如果是这种情况，则会将属性名挂载在节点的 prefix 上，后面会用到
                         node.prefix = `${node.name}: `
                     }
                     // 5.1.2.2.2 重写变量名
@@ -593,39 +594,41 @@ const parentStack: Node[] = []
         }
     }
 })
-```  
+```
 
-1. 在 5.2.2 中会删除非顶层函数产生的引用  
-    先来看什么是 顶层函数  
-    * 顶层函数：在 [babel 解析](#-babel-解析) 的第 2 步中，`asParams` 为 `true` 会产生的箭头函数   
-    * 非顶层函数：在内部数据中存在函数，例如  
-        ```html
-        <div>{{ { a: foo => foo, b: foo } }}</div>
-        ```  
+**Q1：什么是 顶层函数 与 非顶层函数**  
 
-    接下来看看为什么需要移除 非顶层函数 产生的引用，还是以上面为示例，来看它的转换流程  
-    1. 在处理函数 `foo => foo` 时，会将变量 `foo` 放入 `knownIds` 中，其引用数为 `1`  
-    2. 接下来处理返回值 `foo` 时，由于存在引用，所以不需要增加前缀  
-    3. 接下来到了函数的 `leave` 钩子中，会将函数的所有引用清空  
-    4. 继续到了 `b` 属性的值 `foo` 中，由于现在没有引用，所以需要增加前缀  
-        如果不进行第 3 步，那么现在 `knownIds.foo` 的值还是为 1，所以不会增加前缀，与事实不符  
-
-    那为什么顶层函数就不需要呢？
-    例如存在以下代码  
-
+1. 顶层函数：在 [babel 解析](#-babel-解析) 的第 2 步中，`asParams` 为 `true` 会产生的箭头函数  
+2. 非顶层函数：在内部数据中存在函数，例如
     ```html
-    <div v-for="({ foo = bar }) in list">
-        {{ foo }}
-    </div>
-    ```  
+    <div>{{ { a: foo => foo, b: foo } }}</div>
+    ```
 
-    在解析 `{ foo = bar }` 时会调用 [processexpression](#转换过程--processexpression) 并将其作为参数，所以 `source` 就是  
-    ```ts
-    ({ foo = bar }) => {}
-    ```  
-    在处理函数时，也会产生 `foo` 的引用(数值为 `1`)，在函数的 `leave` 钩子中，由于这个函数就是 顶层函数，所以不会删除引用  
-    这样在后面的步骤中，会将 `knownIds` 中的 `key` 都记录在结果的 `identifiers` 上，之后会调用 [addidentifiers](增加标识符--addidentifiers) 将变量加入引用集合中  
-    这样，在解析子节点时，碰见这个变量就不会再加前缀了  
+**Q2：为什么需要删除 非顶层函数 产生的引用**  
+来看它的转换流程  
+
+1. 在处理函数 `foo => foo` 时，会将变量 `foo` 放入 `knownIds` 中，其引用数为 `1`  
+2. 接下来处理返回值 `foo` 时，由于存在引用，所以不需要增加前缀  
+3. 接下来到了函数的 `leave` 钩子中，会将函数的所有引用清空  
+4. 继续到了 `b` 属性的值 `foo` 中，由于现在没有引用，所以需要增加前缀  
+    如果不进行第 3 步，那么现在 `knownIds.foo` 的值还是为 1，所以不会增加前缀，与事实不符  
+
+**Q3：为什么不需要删除 顶层函数 产生的引用**
+例如存在以下代码  
+
+```html
+<div v-for="({ foo = bar }) in list">
+    {{ foo }}
+</div>
+```
+
+在解析 `{ foo = bar }` 时会调用 [processexpression](#转换过程--processexpression) 并将其作为参数，所以 `source` 就是  
+```ts
+'({ foo = bar }) => {}'
+```
+在处理函数参数时，也会产生 `foo` 的引用(数值为 `1`)，在函数的 `leave` 钩子中，由于这个函数就是 顶层函数，所以不会删除引用  
+之后会将 `knownIds` 中的 `key` 都记录在节点的 `identifiers` 上，之后会调用 [addidentifiers](增加标识符--addidentifiers) 将变量加入引用集合中  
+这样，在解析子节点时，碰见这个变量就不会再加前缀了  
 
 ##### 创建复合表达式  
 经过上一步得到的 `ids` 节点列表以及原始变量内容，就可以组合出 “复合表达式” 了，接下来看具体过程  
@@ -693,7 +696,7 @@ ret.identifiers = Object.keys(knownIds)
 
 // 3.13 返回最后的节点 ret
 return ret
-```  
+```
 
 1. 为什么 `start` 和 `end` 要 - 1？  
     注意，在使用 `start` 和 `end` 截取时，都是在原始内容 `rawExp` 上操作的，而不是 `source`  
@@ -707,7 +710,7 @@ return ret
 
     ```html
     <div>{{ { foo } }}</div>
-    ```  
+    ```
     在 [babel ast 转换](#babel-ast-转换) 中第 5 步进行转换时，处理到 `foo` 对应的 `Identifier` 节点，复合 5.1.2.2.1 的条件，将 `foo: ` 挂载在 `prefix` 上  
     接着运行到 [创建复合表达式](#创建复合表达式) 中第 3 步遍历到 `foo` 节点时，会将 `leadingText` 以及 `prefix` 合成一个整体(`{ foo: `) 插入到列表中  
     接着再插入 `_ctx.foo` 对应的节点，形成完整的对象  
@@ -718,7 +721,7 @@ return ret
     ```html
     {{ 10000n }}
     {{ 10000n.toString() }}
-    ```  
+    ```
     
     由于不存在任何的 `Identifier` 节点，所以会进入 [创建复合表达式](#创建复合表达式) 中的 3.11，仍然使用原来的 简单表达式，并更新常量类型   
 
@@ -799,7 +802,7 @@ function shouldPrefix(
     // 9. 剩余情况都需要处理
     return true
 }
-```  
+```
 
 #### 检测是否是解构的赋值语句 —— isInDestructureAssignment  
 以下情况都属于解构赋值  
@@ -808,7 +811,7 @@ function shouldPrefix(
 const [a, b] = []
 
 function func1 () {}
-```  
+```
 
 接下来具体实现  
 
@@ -834,4 +837,4 @@ function isInDestructureAssignment(parent: Node, parentStack: Node[]): boolean {
     }
     return false
 }
-```  
+```

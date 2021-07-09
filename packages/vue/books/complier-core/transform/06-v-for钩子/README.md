@@ -238,7 +238,8 @@ export function processFor(
         children: isTemplateNode(node) ? node.children : [node]
     }
 
-    // 4. 替换当前节点为 v-for 节点
+    // 4. 替换当前节点为 v-for 节点，接下来的钩子实际处理的就是 v-for 节点
+    //    在 traverseNode 中会继续处理 v-for 节点的 children
     context.replaceNode(forNode)
     // 5. 出现一个 v-for 将作用域中的值 + 1
     scopes.vFor++

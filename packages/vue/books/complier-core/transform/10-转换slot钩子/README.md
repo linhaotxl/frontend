@@ -10,6 +10,7 @@
         - [创建 slots 实体插槽对象 —— buildDynamicSlot](#创建-slots-实体插槽对象--builddynamicslot)
     - [创建 slot](#创建-slot)
         - [hasForwardedSlots](#hasforwardedslots)
+- [检测是否存在作用域中的引用变量 —— hasScopeRef](#检测是否存在作用域中的引用变量--hasscoperef)
 
 <!-- /TOC -->
 
@@ -623,5 +624,80 @@ function hasForwardedSlots(children: TemplateChildNode[]): boolean {
 		}
 	}
 	return false
+}
+```  
+
+## 检测是否存在作用域中的引用变量 —— hasScopeRef  
+这个方法用来检测指定节点中是否引用了作用域中的变量  
+
+```ts
+export function hasScopeRef(
+	node: TemplateChildNode | IfBranchNode | ExpressionNode | undefined,	// 待检测节点
+	ids: TransformContext['identifiers']									// 变量引用集合，也就是作用域中的 identifiers 对象
+): boolean {
+	// 1. 如果节点不存在，或者引用集合中没有变量，直接返回 false，表示没有引用
+	if (!node || Object.keys(ids).length === 0) {
+		return false
+	}
+	// 根据各个类型来检测
+	switch (node.type) {
+		// 2. 检测元素节点
+		case NodeTypes.ELEMENT:
+			// 2.1 遍历元素上的所有指令，依次检测指令参数、指令值中是否引用了变量
+			for (let i = 0; i < node.props.length; i++) {
+				const p = node.props[i]
+				if (
+					p.type === NodeTypes.DIRECTIVE &&
+					(hasScopeRef(p.arg, ids) || hasScopeRef(p.exp, ids))
+				) {
+					return true
+				}
+			}
+			// 2.2 遍历所有子节点，检测子节点是否引用了遍历
+			return node.children.some(c => hasScopeRef(c, ids))
+		// 3. 检测 v-for 节点
+		case NodeTypes.FOR:
+			// 3.1 检测 v-for 的源数据中是否引用了变量
+			if (hasScopeRef(node.source, ids)) {
+				return true
+			}
+			// 3.2 遍历所有子节点，检测子节点是否引用了变量
+			return node.children.some(c => hasScopeRef(c, ids))
+		// 4. 检测 v-if 节点，遍历每个 if 分支，检测分支是否引用了变量
+		case NodeTypes.IF:
+			return node.branches.some(b => hasScopeRef(b, ids))
+		// 5. 检测 if 分支节点
+		case NodeTypes.IF_BRANCH:
+			// 5.1 检测分支中的条件是否引用了变量
+			if (hasScopeRef(node.condition, ids)) {
+				return true
+			}
+			// 5.2 遍历所有子节点，检测子节点是否引用了变量
+			return node.children.some(c => hasScopeRef(c, ids))
+		// 6. 检测简单表达式，满足以下条件才属于引用了变量
+		// 	  a. 必须是动态
+		//    b. 变量必须是简单类型
+		//    c. 变量在 ids 中的引用数不是 0
+		case NodeTypes.SIMPLE_EXPRESSION:
+			return (
+				!node.isStatic &&
+				isSimpleIdentifier(node.content) &&
+				!!ids[node.content]
+			)
+		// 7. 复合表达式，检测每一个子节点是否引用了变量
+		case NodeTypes.COMPOUND_EXPRESSION:
+			return node.children.some(c => isObject(c) && hasScopeRef(c, ids))
+		// 8. 插值，创建文本节点，检测文本内容是否引用了变量
+		case NodeTypes.INTERPOLATION:
+		case NodeTypes.TEXT_CALL:
+			return hasScopeRef(node.content, ids)
+		// 9. 文本、注释，都不会引用变量
+		case NodeTypes.TEXT:
+		case NodeTypes.COMMENT:
+			return false
+		// 10. 剩余情况均视为不会引用
+		default:
+			return false
+	}
 }
 ```  

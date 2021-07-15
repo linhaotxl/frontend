@@ -2,10 +2,10 @@
 
 - [作用域对象](#作用域对象)
 - [代码生成流程](#代码生成流程)
+    - [生成资源 —— genAssets](#生成资源--genassets)
     - [生成 module 模式下开始部分代码 —— genModulePreamble](#生成-module-模式下开始部分代码--genmodulepreamble)
     - [生成 function 模式下开始部分代码 —— genFunctionPreamble](#生成-function-模式下开始部分代码--genfunctionpreamble)
     - [生成静态节点 —— genHoists](#生成静态节点--genhoists)
-    - [生成资源 —— genAssets](#生成资源--genassets)
 
 <!-- /TOC -->
 
@@ -49,7 +49,7 @@ export interface CodegenOptions extends SharedTransformCodegenOptions {
      */
     runtimeGlobalName?: string
 }
-```  
+```
 
 注意，`CodegenOptions` 继承了 `SharedTransformCodegenOptions`，不要忘了继承的属性  
 
@@ -60,7 +60,7 @@ function createCodegenContext(
     ast: RootNode,
     {
         mode = 'function',
-        prefixIdentifiers = mode === 'module',
+        prefixIdentifiers = mode === 'module',  // module 模式下默认增加前缀
         sourceMap = false,
         filename = `template.vue.html`,
         scopeId = null,
@@ -71,8 +71,8 @@ function createCodegenContext(
     }: CodegenOptions
 ): CodegenContext {
     const context: CodegenContext = {
-        mode,               // 渲染函数模式
-        prefixIdentifiers,  // 是否增加前缀
+        mode,
+        prefixIdentifiers,
         sourceMap,
         filename,
         scopeId,
@@ -121,14 +121,15 @@ function createCodegenContext(
         },
 
         /**
-         * 换行并缩进，缩进级别 + 1，调用换行函数
+         * 缩进方法
          */
         indent() {
+          	// 缩进级别 + 1 并换行
             newline(++context.indentLevel)
         },
 
         /**
-         * 减小缩进，并根据参数决定是否换行
+         * 恢复缩进方法，并根据参数决定是否换行
          * @param { boolean } withoutNewLine 
          */
         deindent(withoutNewLine = false) {
@@ -136,7 +137,7 @@ function createCodegenContext(
                 // 不换行，只减小缩进级别
                 --context.indentLevel
             } else {
-                // 换行，减小缩进级别，再调用换行函数
+                // 换行，缩进级别 - 1 并调用换行函数
                 newline(--context.indentLevel)
             }
         },
@@ -181,19 +182,19 @@ function createCodegenContext(
 
     return context
 }
-```  
+```
 
 ## 代码生成流程  
 创建完作用域后，就开始对 `AST` 节点生成代码了，先来看看代码生成结果的结构  
 
 ```ts
 export interface CodegenResult {
-    code: string        // 生成代码
+    code: string        // 生成的渲染函数代码
     preamble: string
     ast: RootNode       // 源代码的 AST 节点
     map?: RawSourceMap  // sourceMap 对象
 }
-```  
+```
 
 接下来看具体的实现过程  
 
@@ -233,7 +234,7 @@ export function generate(
         ? createCodegenContext(ast, options)
         : context
     
-    // 8. 生成开始部分的内容，包括各个模块的导入，静态节点的生成
+    // 8. 生成渲染函数之前的内容，包括各个模块的导入，静态节点的生成
     if (!__BROWSER__ && mode === 'module') {
         // 生成 module 模式的内容
         genModulePreamble(ast, preambleContext, genScopeId, isSetupInlined)
@@ -250,7 +251,7 @@ export function generate(
     const functionName = ssr ? `ssrRender` : `render`
     // 10. 入口函数参数
     const args = ssr ? ['_ctx', '_push', '_parent', '_attrs'] : ['_ctx', '_cache']
-    // 11. 
+    // 11. 存在绑定数据并且不是行内模式，会增加额外的参数
     if (!__BROWSER__ && options.bindingMetadata && !options.inline) {
         // binding optimization args
         args.push('$props', '$setup', '$data', '$options')
@@ -274,10 +275,10 @@ export function generate(
 
     // 14. 生成渲染函数
     if (isSetupInlined || genScopeId) {
-        // 如果存在 scopeId，则渲染函数为箭头函数
+        // 14.1 如果存在 scopeId 或者是行内模式，则渲染函数为箭头函数
         push(`(${signature}) => {`)
     } else {
-        // 否则就是普通函数
+        // 14.2 否则就是普通函数
         push(`function ${functionName}(${signature}) {`)
     }
 
@@ -286,39 +287,44 @@ export function generate(
 
     // 16. 检测是否需要用 with 语句
     if (useWithBlock) {
-        // 增加 with 语句块
+        // 16.1 增加 with 语句块
         push(`with (_ctx) {`)
-        // 接下来的内容都在 with 语句内，换行缩进
+        // 16.2 接下来的内容都在 with 语句内，换行缩进
         indent()
+        // 16.3 处理模块函数
         if (hasHelpers) {
-            // 增加从 vue 中导入常量模块的声明，应该处于 with 语句块中，并修改模块名称(增加 _)，避免冲突
+            // 16.3.1 从全局变量 _Vue 中导入模块的声明，应该处于 with 语句块中，并修改模块名称(增加 _)，避免冲突
+            //        const { createVNode: _createVNode } = _Vue;
             push(
                 `const { ${ast.helpers
                 .map(s => `${helperNameMap[s]}: _${helperNameMap[s]}`)
                 .join(', ')} } = _Vue`
             )
-            // 增加换行，这个是 const {} = _Vue 后的换行
+            // 16.3.2 增加换行，这个是 const {} = _Vue 后的换行
             push(`\n`)
-            // 再次换行，这个是 const {} = _Vue 和下一句代码间的换行
+            // 16.3.3 再次换行并缩进，这个是 const {} = _Vue 和下一句代码间的换行
             newline()
         }
     }
 
-    // 17. 生成组件导入语句
+    // 17. 接下来生成导入 自定义组件 的语句
+    //     const _component_comp = _resolveComponent("comp")
     if (ast.components.length) {
         genAssets(ast.components, 'component', context)
         if (ast.directives.length || ast.temps > 0) {
             newline()
         }
     }
-    // 18. 生成指令导入语句
+    // 18. 接下来生成导入 自定义指令 的语句
+    //     const _directive_foo = _resolveDirective("foo")
     if (ast.directives.length) {
         genAssets(ast.directives, 'directive', context)
         if (ast.temps > 0) {
             newline()
         }
     }
-    // 19. 生成临时变量定义语句
+    // 19. 接下来生成 定义临时变量 的语句
+    //     let _temp0, _temp1
     if (ast.temps > 0) {
         push(`let `)
         for (let i = 0; i < ast.temps; i++) {
@@ -331,12 +337,12 @@ export function generate(
         newline()
     }
 
-    // 21. 非服务端渲染下，生成 return 语句，这是渲染函数的 return
+    // 21. 非服务端渲染下，生成 return 语句，这是渲染函数内部的 return
     if (!ssr) {
         push(`return `)
     }
 
-    // 22. 从根节点的生成器开始，依次往下生成对应的代码
+    // 22. 从根节点生成器开始，生成 return 之后的代码
     if (ast.codegenNode) {
         genNode(ast.codegenNode, context)
     } else {
@@ -367,7 +373,41 @@ export function generate(
         map: context.map ? (context.map as any).toJSON() : undefined
     }
 }
-```  
+```
+
+### 生成资源 —— genAssets   
+这个函数用来生成自定义组件、指令导入的代码  
+直接来看具体实现  
+
+```ts
+function genAssets(
+    assets: string[],                           // 资源名称列表
+    type: 'component' | 'directive',            // 资源类型
+    { helper, push, newline }: CodegenContext   // 作用域
+) {
+    // 1. 获取解析资源的函数
+    //    组件 -> _resolveComponent
+    //    指令 -> _resolveDirective
+    const resolver = helper(
+        type === 'component' ? RESOLVE_COMPONENT : RESOLVE_DIRECTIVE
+    )
+
+    // 2. 遍历资源列表
+    for (let i = 0; i < assets.length; i++) {
+        // 2.1 获取资源名
+        const id = assets[i]
+        // 2.2 首先将资源转换为 id，再插入定义资源的代码
+        //     const _component_foo = resolveComponent("foo")
+        push(
+            `const ${toValidAssetId(id, type)} = ${resolver}(${JSON.stringify(id)})`
+        )
+        // 2.3 如果还没有到最后一个，换行
+        if (i < assets.length - 1) {
+            newline()
+        }
+    }
+}
+```
 
 ### 生成 module 模式下开始部分代码 —— genModulePreamble  
 这个函数用来创建 `module` 模式下开头的代码，例如各个模块的引入、静态节点的创建等  
@@ -394,21 +434,22 @@ function genModulePreamble(
 
     // 1. 处理生成 scopeId 的情况
     if (genScopeId) {
-        // 向帮助模块中添加 WITH_SCOPE_ID 以供后续 import 进来
+        // 1.1 向帮助模块中添加 withScopeId 以供后续 import 进来
         ast.helpers.push(WITH_SCOPE_ID)
-        // 如果存在静态节点，在向帮助模块列表中添加 PUSH_SCOPE_ID 和 POP_SCOPE_ID 以供后续 import 进来
+        // 1.2 如果存在静态节点，在向帮助模块列表中添加 pushScopeId 和 popScopeId 以供后续 import 进来
         if (ast.hoists.length) {
             ast.helpers.push(PUSH_SCOPE_ID, POP_SCOPE_ID)
         }
     }
 
-    // 2. 生成各个模块下的 import 语句
+    // 2. 生成各个模块的 import 语句
     if (ast.helpers.length) {
         if (optimizeImports) {
 
-        } else {
-            // 将每个帮助模块的名称修改为 _名称，并从运行时模块 runtimeModuleName 中导入，例如
-            // import { openBlock as _openBlock, createBlock as _createBlock } from 'vue'
+        }
+        // 2.2 将每个模块的名称修改为私有名称，并从运行时模块 runtimeModuleName 中导入
+        //     import { openBlock as _openBlock, createBlock as _createBlock } from "vue"
+        else {
             push(
                 `import { ${ast.helpers
                     .map(s => `${helperNameMap[s]} as _${helperNameMap[s]}`)
@@ -418,12 +459,13 @@ function genModulePreamble(
     }
 
     // 3. 生成服务端渲染下，各个模块的 import 语句
-    //    将每个帮助模块的名称修改为 _名称，并从 @vue/server-renderer 中导入，例如
+    //    将每个模块名称修改为私有名称，并从 @vue/server-renderer 中导入
+    //    import {} from "@vue/server-renderer"
     if (ast.ssrHelpers && ast.ssrHelpers.length) {
         push(
-        `import { ${ast.ssrHelpers
-            .map(s => `${helperNameMap[s]} as _${helperNameMap[s]}`)
-            .join(', ')} } from "@vue/server-renderer"\n`
+            `import { ${ast.ssrHelpers
+                .map(s => `${helperNameMap[s]} as _${helperNameMap[s]}`)
+                .join(', ')} } from "@vue/server-renderer"\n`
         )
     }
 
@@ -432,7 +474,7 @@ function genModulePreamble(
         newline()
     }
 
-    // 5. 处理 scopeId，例如
+    // 5. 处理 scopeId
     //    const _withId = /*#__PURE__*/_withScopeId("xxx")
     if (genScopeId) {
         push(
@@ -447,49 +489,52 @@ function genModulePreamble(
     // 7. 换行
     newline()
 
-    // 8. 生成导出关键字 export 
+    // 8. 非行内模式下生成导出渲染函数关键字 export 
     if (!inline) {
         push(`export `)
     }
 }
-```  
+```
 
 ### 生成 function 模式下开始部分代码 —— genFunctionPreamble  
 这个函数用来创建 `function` 模式下开头的代码，和 [module]() 不同，`function` 下又有两种模式，这两种模式根据 `prefixIdentifiers` 来区分  
 
-1. 前缀模式，模板中的变量均添加前缀 `_ctx` 表示来源，例如  
+1. 前缀模式，模板中的变量均添加前缀 `_ctx` 表示来源，这种模式下，需要将模块在一开始就导入  
 
 ```html
 <span>{{ name }}</span>
-```  
+```
 生成渲染函数为  
 
 ```ts
+const { toDisplayString: _toDisplayString, openBlock: _openBlock, createBlock: _createBlock } = Vue
+
 return function render(_ctx, _cache, $props, $setup, $data, $options) {
-    return (_openBlock(), _createBlock("span", null, _toDisplayString(_ctx.name), 1 /* TEXT */))
+  return (_openBlock(), _createBlock("span", null, _toDisplayString(_ctx.name), 1 /* TEXT */))
 }
-```  
+```
 
-这种模式下，会将各个模块在一开始就解构出来  
-
-2. `with` 模式(不需要前缀)，渲染函数中所有代码用 `with` 语句包裹，这样模板中的变量不会增加前缀，等到执行时，会自动去 `with` 的作用域中查找，例如  
+2. `with` 模式(不需要前缀)，渲染函数中所有代码用 `with` 语句包裹，包括导入模块，这样模板中的变量不会增加前缀，而是会自动去 `with` 的作用域中查找，但是静态节点还是会放在渲染函数外面  
 
 ```html
-<span>{{ name }}</span>
-```  
+<span id="app">{{ name }}</span>
+```
 生成渲染函数为  
 
 ```ts
-return function render(_ctx, _cache, $props, $setup, $data, $options) {
-    with (_ctx) {
-        const { toDisplayString: _toDisplayString, openBlock: _openBlock, createBlock: _createBlock } = _Vue
-        return (_openBlock(), _createBlock("span", null, _toDisplayString(name), 1 /* TEXT */))
-    }
-}
-```  
+const _Vue = Vue
+const _hoisted_1 = { id: "app" }
 
-这种模式下，各个模块的解构并不会发生在一开始，而是在 `with` 内的开始，但还有一种特殊情况，就是存在静态节点  
-此时会将与静态节点相关的模块提出到函数外面去解构  
+return function render(_ctx, _cache, $props, $setup, $data, $options) {
+  with (_ctx) {
+    const { toDisplayString: _toDisplayString, openBlock: _openBlock, createBlock: _createBlock } = _Vue
+
+    return (_openBlock(), _createBlock("div", null, _toDisplayString(name), 1 /* TEXT */))
+  }
+}
+```
+
+接下来看具体过程
 
 ```ts
 function genFunctionPreamble(
@@ -505,30 +550,30 @@ function genFunctionPreamble(
         runtimeGlobalName
     } = context
 
-    // 1. 获取需要
+    // 1. 定义全局变量的值
     //    服务端从 require("vue") 中引入
-    //    浏览器直接从全局变量 Vue 中解构
+    //    浏览器直接从全局变量 Vue
     const VueBinding =
         !__BROWSER__ && ssr
             ? `require(${JSON.stringify(runtimeModuleName)})`
             : runtimeGlobalName
 
-    // 2. 定义 将模块名转换为私有模块 的函数
+    // 2. 定义 将模块转换为私有模块的函数
     const aliasHelper = (s: symbol) => `${helperNameMap[s]}: _${helperNameMap[s]}`
 
     // 3. 处理存在模块的情况
     if (ast.helpers.length > 0) {
-        // 前缀模式，将所有模块解构出来
+        // 3.1 前缀模式，将所有模块解构出来
         if (!__BROWSER__ && prefixIdentifiers) {
             push(
                 `const { ${ast.helpers.map(aliasHelper).join(', ')} } = ${VueBinding}\n`
             )
         }
-        // with 模式
+        // 3.2 with 模式
         else {
-            // 插入代码：将 Vue 保存在单独的变量中，避免冲突
+            // 3.2.1 插入代码：将全局变量 Vue 保存在 _Vue 变量中，避免冲突
             push(`const _Vue = ${VueBinding}\n`)
-            // 处理静态节点，若存在以下四种的模块，将它们解构在一开始
+            // 3.2.2 处理静态节点，若存在以下四种模块，则会将它们在一开始导入
             if (ast.hoists.length) {
                 const staticHelpers = [
                     CREATE_VNODE,
@@ -562,10 +607,10 @@ function genFunctionPreamble(
     // 7. 生成返回渲染函数的 return
     push(`return `)
 }
-```  
+```
 
 ### 生成静态节点 —— genHoists  
-这个函数只会被调用在上面两个函数内，且都是在导入各个模块的后面，渲染函数之前，是因为静态节点需要在这里执行  
+这个函数只会被调用在上面两个函数内，且都是在导入各个模块的后面，渲染函数之前，是因为静态节点需要在模块后面，渲染函数之前  
 
 接下来看具体实现  
 
@@ -599,11 +644,11 @@ function genHoists(
     // 6. 遍历静态节点列表
     hoists.forEach((exp, i) => {
         if (exp) {
-            // 生成静态节点定义，例如 const _hoisted_1 = 
+            // 6.1 生成静态节点定义，例如 const _hoisted_1 = 
             push(`const _hoisted_${i + 1} = `)
-            // 通过 genNode 解析每个静态节点，这函数在后面会讲到
+            // 6.2 通过 genNode 解析每个静态节点，这函数在后面会讲到
             genNode(exp, context)
-            // 换行
+            // 6.3 换行
             newline()
         }
     })
@@ -617,37 +662,4 @@ function genHoists(
     // 8. 取消纯函数注释标记
     context.pure = false
 }
-```  
-
-### 生成资源 —— genAssets   
-这个函数用来生成解析组件、指令的代码  
-直接来看具体实现  
-
-```ts
-function genAssets(
-    assets: string[],                           // 资源名称列表
-    type: 'component' | 'directive',            // 资源类型
-    { helper, push, newline }: CodegenContext   // 作用域
-) {
-    // 获取解析资源的函数
-    // 组件 -> resolveComponent
-    // 指令 -> resolveDirective
-    const resolver = helper(
-        type === 'component' ? RESOLVE_COMPONENT : RESOLVE_DIRECTIVE
-    )
-
-    // 遍历资源列表
-    for (let i = 0; i < assets.length; i++) {
-        const id = assets[i]
-        // 插入解析资源的代码
-        // 例如 const _component_foo = resolveComponent("foo")
-        push(
-            `const ${toValidAssetId(id, type)} = ${resolver}(${JSON.stringify(id)})`
-        )
-        // 如果还没有到最后一个，换行
-        if (i < assets.length - 1) {
-            newline()
-        }
-    }
-}
-```  
+```

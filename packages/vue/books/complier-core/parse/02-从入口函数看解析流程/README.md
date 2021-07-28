@@ -23,7 +23,7 @@ export function baseParse(
     const start = getCursor(context)
     // 3. 创建根节点
     return createRoot(
-        // 3.1 以 TextModes.DATA 模式解析所有子节点
+        // 3.1 以正常(TextModes.DATA)模式解析所有子节点
         parseChildren(context, TextModes.DATA, []),
         // 3.2 解析完所有的子节点，获取从模板开始一直到结束的定位
         getSelection(context, start)
@@ -75,14 +75,15 @@ export function createRoot(
 ```
 
 ## 解析子节点  
-由于子节点的类型有很多(文本、插值、注释、元素等等)，所以这个函数只会检测属于哪种类型，再由其他方法完成具体的解析过程  
+由于子节点的类型有很多(文本、插值、注释、元素等等)，所以这个函数只会检测属于哪种类型，再由具体的方法完成解析过程  
 先来看看它都有哪些参数  
 
 1. `context`：作用域对象  
 2. `mode`：解析子节点的模式  
 3. `ancestors`：父节点列表(是一个栈结构)  
-    源码中是这样存储每个父节点的：当解析一个元素时，会先解析开始标签，解析完成后将结果存入 `ancestors` 中  
-    接着再解析所有的子节点，等到所有的子节点都解析完时，再将前面存进去的节点取出  
+    源码中是这样存储每个父节点的：当解析一个元素时，会先解析开始标签，再解析子节点，最后解析结束标签 
+    当解析完开始标签后将开始标签节点存入 `ancestors` 中，当解析完结束标签后将标签节点移除  
+    这样在解析子节点的过程中就可以获取到标签点的信息
 
 接下来先看大致的流程  
 
@@ -105,15 +106,17 @@ function parseChildren(
     while (!isEnd(context, mode, ancestors)) {
         // 4.1 获取需要解析的模板
         const s = context.source
-        // 4.2 解析后的节点
+        // 4.2 定义解析完成的节点变量
         let node: TemplateChildNode | TemplateChildNode[] | undefined = undefined
 
-        // 4.3 只有 DATA 和 RCDATA 两种模式才会进行解析
+        // 4.3 只有 DATA 和 RCDATA 两种模式才会进行下面具体的解析
+        //     RCDATA 模式只会解析插值表达式；例如 <textarea /> 中的插值表达式是需要解析的
+        //     剩余情况都由 DATA 模式解析
         if (mode === TextModes.DATA || mode === TextModes.RCDATA) {
             // 4.3.1 解析插值表达式，必须不存在于 v-pre 指令内，且开头是以插值表达式的分隔符开始的
             if (!context.inVPre && startsWith(s, context.options.delimiters[0])) {
                 node = parseInterpolation(context, mode)
-            } 
+            }
             // 4.3.2 解析除插值表达式之外的情况，必须处于 DATA 且第一个字符是 <
             else if (mode === TextModes.DATA && s[0] === '<') {
                 // 4.3.2.1 如果只有一个 < 字符，那么就说明少了标签名，抛错，接下来会被当做文本解析
@@ -126,20 +129,22 @@ function parseChildren(
                     if (startsWith(s, '<!--')) {
                         node = parseComment(context)
                     }
-                    // b 解析 DOCTYPE，会被当做一个无效注释解析
+                    // b 解析 DOCTYPE，会被当做一个注释解析
                     else if (startsWith(s, '<!DOCTYPE')) {
                         node = parseBogusComment(context)
                     }
-                    // c 解析 CDATA，
+                    // c 解析 CDATA，CDATA 只能出现在 XML 的作用域，如果出现在普通的 HTML 下则抛错
                     else if (startsWith(s, '<![CDATA[')) {
                         if (ns !== Namespaces.HTML) {
+                            // 正常情况，由 parseCDATA 完成解析
                             node = parseCDATA(context, ancestors)
                         } else {
+                            // 异常情况，抛错，被当做注释解析
                             emitError(context, ErrorCodes.CDATA_IN_HTML_CONTENT)
                             node = parseBogusComment(context)
                         }
                     }
-                    // d 剩余情况都会被解析为无效注释，例如 <!、 <!a，同时抛错
+                    // d 剩余情况都会被解析为注释，例如 <!、 <!a，同时抛错
                     else {
                         emitError(context, ErrorCodes.INCORRECTLY_OPENED_COMMENT)
                         node = parseBogusComment(context)
@@ -157,13 +162,13 @@ function parseChildren(
                         advanceBy(context, 3)
                         continue
                     }
-                    // c 如果是无效的标签名，例如 <div></span></div>，虽然也会将其作为结束标签解析，但是并不会加入到子节点列表中
+                    // c 如果是无效的标签名，例如 </div>，虽然也会将其作为结束标签解析，但是并不会加入到子节点列表中
                     else if (/[a-z]/i.test(s[2])) {
                         emitError(context, ErrorCodes.X_INVALID_END_TAG)
                         parseTag(context, TagType.End, parent)
                         continue
                     }
-                    // d 剩余情况都被视为有问题，当做无效注释来解析，并抛错
+                    // d 剩余情况会被认为标签名的第一个字符是无效的，例如 </ b，会被当做注释来解析
                     else {
                         emitError(
                             context,
@@ -173,11 +178,11 @@ function parseChildren(
                         node = parseBogusComment(context)
                     }
                 }
-                // 4.3.2.3 解析标签，例如 <div></div>
+                // 4.3.2.3 解析标签，例如 <div></div>，由 parseElement 完成
                 else if (/[a-z]/i.test(s[1])) {
                     node = parseElement(context, ancestors)
                 }
-                // 4.3.2.4 解析 <? 情况，由于这种只能出现在 XML 文本中，所以会将其视为无效注释来解析，并抛错
+                // 4.3.2.4 解析 <? 情况，由于这种只能出现在 XML 文本中，所以会将其视为注释来解析，并抛错
                 else if (s[1] === '?') {
                     emitError(
                         context,
@@ -186,7 +191,7 @@ function parseChildren(
                     )
                     node = parseBogusComment(context)
                 }
-                // 4.3.2.5 剩余情况会被认为是标签名的第一个字符是无效的，例如 a < b，会被当做文本来解析
+                // 4.3.2.5 剩余情况会被认为标签名的第一个字符是无效的，例如 < b，会被当做文本来解析
                 else {
                     emitError(context, ErrorCodes.INVALID_FIRST_CHARACTER_OF_TAG_NAME, 1)
                 }
@@ -199,7 +204,7 @@ function parseChildren(
             node = parseText(context, mode)
         }
 
-        // 4.5 将解析结果 push 到 nodes 中
+        // 4.5 将解析结果 push 到 nodes 中，这个函数下一届会说到，现在可以理解为就是数组的 push 方法
         if (isArray(node)) {
             for (let i = 0; i < node.length; i++) {
                 pushNode(nodes, node[i])
@@ -214,7 +219,7 @@ function parseChildren(
 
     // ...
 
-    // 6. 返回子节点列表
+    // 6. 返回子节点列表，如果需要删除空白符，则会过滤
     return removedWhitespace ? nodes.filter(Boolean) : nodes
 }
 ```
@@ -236,7 +241,7 @@ if (mode !== TextModes.RAWTEXT) {
     // 1. 遍历所有子节点
     for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i]
-        // 1.1 如果不处于 pre 标签内，且是一个文本节点，则进行下一步处理
+        // 1.1 如果不处于 pre 标签内，且是一个文本节点
         if (!context.inPre && node.type === NodeTypes.TEXT) {
             // 1.1.1 若当前节点中只含有空白符时，会进行下面的处理
             if (!/[^\t\r\n\f ]/.test(node.content)) {
@@ -271,7 +276,7 @@ if (mode !== TextModes.RAWTEXT) {
             }
         }
         
-        // 1.2 处理注释节点，如果选项 comments 为 false，则会将注释节点移除，只会用于生产环境
+        // 1.2 处理注释节点，如果选项 comments 为 false，则会将注释节点移除
         if (
             !__DEV__ &&
             node.type === NodeTypes.COMMENT &&
@@ -283,6 +288,7 @@ if (mode !== TextModes.RAWTEXT) {
     }
     
     // 2. 如果 pre 内的第一个子节点是文本，则会将文本的开头的换行符移除
+    //    <pre>\n  foo  bar  </pre> -> <pre>  foo  bar  </pre>
     if (context.inPre && parent && context.options.isPreTag(parent.tag)) {
         // https://html.spec.whatwg.org/multipage/grouping-content.html#the-pre-element
         const first = nodes[0]
@@ -291,19 +297,10 @@ if (mode !== TextModes.RAWTEXT) {
         }
     }
 }
-```  
 
-对应第 2 步的示例  
-
-```html
-<pre>
-  foo  bar
-</pre>
-
-<!-- 会被解析为 -->
-<pre>  foo  bar
-</pre>
-```  
+// 如果需要移除空白节点，则进行过滤
+return removedWhitespace ? nodes.filter(Boolean) : nodes
+```
 
 ## 判断是否结束 isEnd  
 每次解析完一个类型的节点后，都会调用这个函数来判断是否结束，不同 `TextModes` 的结束标识是不同的，接下来看实现  
@@ -352,7 +349,7 @@ function isEnd(
     // 如果模板还有内容，则代表没有结束；如果没有内容了，则代表已经结束
     return !s
 }
-```  
+```
 
 ## startsWithEndTagOpen  
 检测模板是否以指定标签结束  
@@ -368,4 +365,4 @@ function startsWithEndTagOpen(source: string, tag: string): boolean {
         /[\t\r\n\f />]/.test(source[2 + tag.length] || '>')
     )
 }
-```  
+```

@@ -21,7 +21,7 @@ export interface TextNode extends Node {
 
 ```ts
 function parseText(context: ParserContext, mode: TextModes): TextNode {
-    // 1. 创建文本结束标识，当文本遇到这些字符时，说明文本结束
+    // 1. 创建文本结束标识，当文本遇到这些字符时，说明文本结束；例如 hello<div />
     //    默认是 标签符 < 以及 插槽开始符 {{
     //    如果是 CDATA 还会加入 CDATA 的结束符 ]]>
     const endTokens = ['<', context.options.delimiters[0]]
@@ -30,9 +30,9 @@ function parseText(context: ParserContext, mode: TextModes): TextNode {
     }
     // 2. 定义文本结束索引，默认是剩余模板的长度
     let endIndex = context.source.length
-    // 3. 遍历结束标识列表，查询第一个结束标识出现的索引
-    //    如果出现多个结束符，则以后面的为准，即越往后，优先级越高
-    //    例如，在解析 "hello world {{ foo }}<div></div>" 时，结束符应该是 {{ 而不是 <
+    // 3. 遍历结束标识列表，查询优先级最高的标识索引
+    //    在结束列表中，越往后，优先级越高
+    //    例如，在解析 hello world {{ foo }}<div></div> 时，结束符应该是 {{ 而不是 <
     for (let i = 0; i < endTokens.length; i++) {
         // 3.1 匹配是从 1 开始
         const index = context.source.indexOf(endTokens[i], 1)
@@ -59,15 +59,15 @@ function parseText(context: ParserContext, mode: TextModes): TextNode {
 考虑以下文本内容  
 
 ```html
-a < b
+a < b // 这是一个条件表达式
 ```
 
-解析这段文本时，先碰到了结束符 `<`，所以先会解析文本 `a ` 并截取  
-再解析文本 `< b` 时，会被当做文本来解析，再次进入这个函数
+解析这段文本时，先碰到了结束符 `<`，所以先会将 “a ” 当做文本解析  
+之后再解析文本 `< b` 时，会被当做文本来解析，再次进入这个函数
 
-如果从 `0` 开始查找，那么 `endIndex` 就是 `0`，这样的话在第 5 步中解析出来的内容就是 `''`，这是无效的  
+如果 3.1 中从 `0` 开始查找，那么 `endIndex` 就是 `0`，这样的话在第 5 步中解析出来的内容就是 `''`，这是无效的  
 而如果从 `1` 开始查找，那么 `endIndex` 就是 `3`(模板长度)，这样在第 5 步中解析出来的内容就是 `< b`  
-所以这里直接跳过了第一个字符，从第二个字符开始查找结束标识，避免结束符出现在开头的情况  
+所以这里直接跳过了第一个字符，从第二个字符开始查找结束标识，就是为了避免结束符出现在开头的情况  
 
 ## 解析文本值  
 这个函数用来解析具体的值，用到的地方会很多，例如文本值，插槽内的值，属性值等等  
@@ -83,7 +83,7 @@ function parseTextData(
     const rawText = context.source.slice(0, length)
     // 2. 使光标前进指定长度
     advanceBy(context, length)
-    // 3. 以下情况不需要解析内容，直接返回原始内容
+    // 3. 以下情况不需要解析 实体字符，直接返回原始内容
     if (
         mode === TextModes.RAWTEXT ||   // 文本模式为 RAWTEXT
         mode === TextModes.CDATA ||     // 文本模式为 CDATA
@@ -114,7 +114,7 @@ function parseTextData(
 a < b
 ```
 
-最终得到了两个文本节点 `a ` 和 `< b`，但实际这应该是一个文本节点，所以这个函数会将它们合并为一个节点，接下来看实现  
+经过前面指示点，可以知道最终得到了两个文本节点 “a ” 和 “< b”，但实际这应该是一个文本节点，所以这个函数会将它们合并为一个节点，接下来看实现  
 
 ```ts
 function pushNode(
@@ -127,6 +127,7 @@ function pushNode(
         const prev = last(nodes)
         // 如果前一个节点也是文本节点
         // 并且前一个文本节点的结束位置和当前节点的开始位置重合，那么会认为两个文本节点实际是一个，所以接下来会将当前节点合并到上一个
+        // 注意，end 指向的是下一个字符的位置，所以是存在 end.offset === start.offset 这种情况的
         if (
             prev &&
             prev.type === NodeTypes.TEXT &&
@@ -149,10 +150,10 @@ function pushNode(
 ## 解析插槽表达式  
 这个函数用来解析插值表达式里的内容，在接下来的内容中，存在几个名词  
 
-1. 原始内容：插值表示式整体，对应下面的 `{{ a &lt; b }}`  
-2. 有效内容：插值表达式有效内容，对应下面的 ` a &lt; b ` 
-3. 解析内容：插值的有效内容转换后的结果，下面的解析结果就是 ` a < b ` 
-4. 去除空白的解析内容：将解析内容去除两边空白符，下面的结果就是 `a < b`  
+1. 原始内容：插值表示式整体，对应下面的 `“{{ a &lt; b }}”` 
+2. 有效内容：插值表达式分隔符中的内容，对应下面的 `“ a &lt; b ”` 
+3. 解析内容：有效内容中实体字符转换后的结果，下面的解析结果就是 `“ a < b ”` 
+4. 去除空白的解析内容：将解析内容去除两边空白符，下面的结果就是 `“a < b”`  
 
     ```ts
     {{ a &lt; b }}
@@ -161,6 +162,9 @@ function pushNode(
 先来看插值表达节点的类型  
 
 ```ts
+// 表达式节点，是 简单表达式 和 复合表达式 的联合类型
+export type ExpressionNode = SimpleExpressionNode | CompoundExpressionNode
+
 export interface InterpolationNode extends Node {
     type: NodeTypes.INTERPOLATION   // 节点类型为 INTERPOLATION
     content: ExpressionNode         // 内容也是一个节点
@@ -171,12 +175,14 @@ export interface InterpolationNode extends Node {
 
 1. 插值节点的 `loc` 是 “原始内容” 的定位信息  
 2. 插值节点的 `content` 表示 “去除空白的解析内容” 的节点  
+3. 在解析阶段，`content` 只会是 `SimpleExpressionNode` 节点
 
 接下来看具体实现，会通过下面的示例配合源码  
 
 ```html
+<!--{{  "abc"  }}-->
 {{&nbsp;&nbsp;&quot;abc&quot;&nbsp;&nbsp;}}
-```  
+```
 
 
 ```ts
@@ -206,16 +212,15 @@ function parseInterpolation(
     
     // 6. 获取原始内容的长度，上例中是 39
     const rawContentLength = closeIndex - open.length
-    // 7. 获取原始内容，上例中是 '&nbsp;&nbsp;&quot;abc&quot;&nbsp;&nbsp;'
+    // 7. 获取原始内容，上例中是 &nbsp;&nbsp;&quot;abc&quot;&nbsp;&nbsp;
     const rawContent = context.source.slice(0, rawContentLength)
     
-    // 8. 获取解析内容，将原始内容解析，使 context.source 的光标前进原始内容的长度，上例中是 '  "abc"  '
+    // 8. 获取解析内容: 将原始内容解析，使 context.source 的光标前进原始内容的长度，上例中是 '  "abc"  '
     const preTrimContent = parseTextData(context, rawContentLength, mode)
     // 9. 获取 去除空白的解析内容，上例中是 '"abc"'
     const content = preTrimContent.trim()
 
-    // 10. 获取 解析内容 前面的空白符数量，其实就是看 content 在 preTrimContent 中的位置
-    //     由于这个位置肯定是 大于 0 的，所以可以理解为空白符的数量
+    // 10. 获取 content 在 preTrimContent 中的偏移，由于这个值肯定是 >= 0 的，所以可以理解为前面空白符的数量
     //     上例中是 2，所以会使 innerStart 前进 2
     const startOffset = preTrimContent.indexOf(content)
     // 11. 如果有空白符，则将 innerStart 前进 startOffset 长度
@@ -223,8 +228,8 @@ function parseInterpolation(
         advancePositionWithMutation(innerStart, rawContent, startOffset)
     }
     
-    // 12. 获取结束偏移(解析内容中，后面第一个空白符在原始内容中的位置)
-    //     先获取 解析内容 后面空白符的数量：解析内容长度 - 去除空白的解析内容 - 前面的空白符个数，上例中是 '  "abc"  ' - '"abc"' - 2 = 2
+    // 12. 获取结束偏移(解析内容中，后面空白符在原始内容中的位置)
+    //     先获取 解析内容 中后面空白符的数量：解析内容长度 - 去除空白的解析内容 - 前面的空白符个数，上例中是 '  "abc"  ' - '"abc"' - 2 = 2
     //     再用原始内容长度 - 后面的空白符数量，上例中是 39 - 2 = 37
     //     之所以要计算在原始内容中的位置，是因为原始内容存在未转换的字符，而需要将 innerEnd 前进的长度，必须包含未转换的字符
     const endOffset =
@@ -238,10 +243,11 @@ function parseInterpolation(
     // 15. 返回插值节点
     return {
         type: NodeTypes.INTERPOLATION,
+        // 插值节点的 content 是 SIMPLE_EXPRESSION 节点
         content: {
             type: NodeTypes.SIMPLE_EXPRESSION,
             isStatic: false,
-            // Set `isConstant` to false by default and will decide in transformExpression
+            // 插值内容的常量类型默认是 非常量，这个值主要在下个阶段用到
             constType: ConstantTypes.NOT_CONSTANT,
             content,
             // 有效内容去除空格的定位

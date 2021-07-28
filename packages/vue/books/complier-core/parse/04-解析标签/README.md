@@ -28,8 +28,8 @@ function parseElement(
     // 4. 解析开始标签的所有内容：标签名 + 属性
     //    如果是 pre 标签，或者存在 v-pre 指令，那么会将作用域中的 inPre、inVPre 设置为 true
     const element = parseTag(context, TagType.Start, parent)
-    // 5. 检查是否是 pre 标签、v-pre 指令的边界
-    //    边界就是指，pre 标签的尾标签，v-pre 指令所在元素的尾标签
+    // 5. 检查是否是 pre 标签、v-pre 的边界
+    //    边界：是否是产生 pre 或 v-pre 的元素
     //    之所以要检测边界，是为了在解析完子节点后，需要将作用域中的 inPre、inVPre 恢复，具体的检测方法会在后面说
     const isPreBoundary = context.inPre && !wasInPre
     const isVPreBoundary = context.inVPre && !wasInVPre
@@ -47,7 +47,7 @@ function parseElement(
     const children = parseChildren(context, mode, ancestors)
     // 10. 子节点解析完成，删除父节点
     ancestors.pop()
-    // 11. 将解析完成的所有子节点存储在父节点上
+    // 11. 将子节点存储在父节点上
     element.children = children
 
     // 12. 检测标签是否结束
@@ -78,14 +78,14 @@ function parseElement(
     // 15. 返回元素节点
     return element
 }
-```  
+```
 
 1. 检测 `pre`、`v-pre` 边界  
 
     ```ts
     const isPreBoundary = context.inPre && !wasInPre
     const isVPreBoundary = context.inVPre && !wasInVPre
-    ```  
+    ```
     在解析完开始标签后，先判断作用域中的 `inPre`、`inVPre`  
     * 如果为 `true`，可能是以下两种情况之一  
         1. 这是一个 `pre` 标签，或者存在 `v-pre` 指令  
@@ -103,7 +103,7 @@ const enum TagType {
     Start,
     End
 }
-```    
+```
 
 同时，由于模板中存在许多内置指令，所以会用接下来这个变量来检测，后面会用到  
 
@@ -120,7 +120,7 @@ const isSpecialTemplateDirective = /*#__PURE__*/ makeMap(
 //     'for': true,
 //     'slot': true,
 // }
-```  
+```
 
 元素节点又可以分为以下 4 种，通过该枚举来表示  
 
@@ -131,7 +131,7 @@ export const enum ElementTypes {
     SLOT,       // 插槽：<slot />
     TEMPLATE    // 模板：<template />
 }
-```  
+```
 
 接下来看看元素节点的结构(其中 `codegenNode` 和 `ssrCodegenNode` 可以先不同看，这一阶段不涉及)  
 
@@ -189,7 +189,7 @@ export interface TemplateNode extends BaseElementNode {
     // TemplateNode is a container type that always gets compiled away
     codegenNode: undefined
 }
-```  
+```
 
 接下来看具体的实现  
 
@@ -318,7 +318,7 @@ function parseTag(
         codegenNode: undefined // to be created during transform phase
     }
 }
-```  
+```
 
 注意：  
 1. `v-is` 会将指定的组件渲染到当前位置，例如 `<tr v-is="'comp'"></tr>` 会将 `comp` 代替 `tr`，所以带有 `v-is` 指令的其实也是一个组件  
